@@ -6,6 +6,8 @@ var pieces = require('../pieces.js');
 var game = require('../game.js');
 var generator = require('../generator.js');
 var monetization = require('../monetization.js');
+var ads = require('../ads.js');
+var experiments = require('../experiments.js');
 
 var passed = 0;
 function test(name, fn) {
@@ -319,9 +321,21 @@ test('revive: restores board from 3 moves ago, keeps 100% of score', function ()
   assert.ok(st.tray.every(function (p) { return p !== null; }), 'fresh tray dealt');
   assert.ok(game.anyFit(st.board, st.tray), 'fresh tray is playable');
 
-  var again = monetization.reviveGame(st, rng);
-  assert.strictEqual(again.ok, false, 'max 1 revive per run');
-  assert.strictEqual(again.reason, 'revive-limit');
+  assert.strictEqual(monetization.reviveAdCost(st), 2, '2nd revive costs 2 ad views');
+  var second = monetization.reviveGame(st, rng);
+  assert.strictEqual(second.ok, true, '2nd revive allowed (escalating cost)');
+  assert.strictEqual(st.revivesUsed, 2);
+
+  var third = monetization.reviveGame(st, rng);
+  assert.strictEqual(third.ok, false, 'max 2 revives per run');
+  assert.strictEqual(third.reason, 'revive-limit');
+});
+
+test('reviveAdCost: 1 ad view for the first revive, 2 for the second', function () {
+  var st = game.createGame();
+  assert.strictEqual(monetization.reviveAdCost(st), 1);
+  st.revivesUsed = 1;
+  assert.strictEqual(monetization.reviveAdCost(st), 2);
 });
 
 test('revive: short history clears 14 random cells', function () {
@@ -385,6 +399,158 @@ test('powerups: start at 3, use decrements, refill adds 3', function () {
   assert.strictEqual(monetization.getPowerups('hammer'), 5);
   monetization.setPowerups('hammer', 0);
   assert.strictEqual(monetization.usePowerup('hammer'), false);
+});
+
+/* ---------------- pity timer + difficulty ramp ---------------- */
+test('pity: drought counter resets on 2+ line clears, grows otherwise', function () {
+  var st = game.createGame();
+  assert.strictEqual(st.movesSinceMultiClear, 0);
+  // Simulate a non-clearing move via scoreMove.
+  game.scoreMove(st, 3, { lines: 0, cells: [] });
+  assert.strictEqual(st.movesSinceMultiClear, 1);
+  game.scoreMove(st, 3, { lines: 1, cells: [[0,0]] });
+  assert.strictEqual(st.movesSinceMultiClear, 2, 'single-line clear does not reset drought');
+  game.scoreMove(st, 8, { lines: 2, cells: [[0,0],[0,1]] });
+  assert.strictEqual(st.movesSinceMultiClear, 0, 'multi-line clear resets drought');
+});
+
+test('pity: after a long drought, tray includes a piece touching the emptiest line', function () {
+  var board = game.emptyBoard();
+  // Row 0 nearly complete: only column 7 empty.
+  for (var c = 0; c < 7; c++) board[0][c] = 1;
+  var tray = generator.drawTray(board, lcg(42), {
+    score: 0, movesSinceMultiClear: 20, pityThreshold: 12, rampEnabled: false
+  });
+  assert.strictEqual(tray.length, 3);
+  assert.ok(game.anyFit(board, tray), 'fairness guarantee still holds with pity');
+  // At least one piece must have a legal placement covering (0,7).
+  var covers = tray.some(function (p) {
+    for (var o = 0; o < p.cells.length; o++) {
+      var r0 = 0 - p.cells[o][0], c0 = 7 - p.cells[o][1];
+      if (generator.canPlace(board, p, r0, c0)) return true;
+    }
+    return false;
+  });
+  assert.ok(covers, 'pity piece helps complete the nearly-finished row');
+});
+
+test('pity: no pity piece before the drought threshold', function () {
+  var board = game.emptyBoard();
+  for (var c = 0; c < 7; c++) board[0][c] = 1;
+  // With drought below threshold the draw is plain weighted random; just
+  // assert fairness and shape (pity is probabilistic by slot, not asserted here).
+  var tray = generator.drawTray(board, lcg(42), {
+    score: 0, movesSinceMultiClear: 5, pityThreshold: 12, rampEnabled: false
+  });
+  assert.strictEqual(tray.length, 3);
+  assert.ok(game.anyFit(board, tray));
+});
+
+test('ramp: big pieces get heavier with score, small pieces lighter (ramp on)', function () {
+  var big = pieces.SHAPES[10]; // square3, 9 cells, not small
+  var small = pieces.SHAPES[0]; // dot
+  var wBig0 = generator.effectiveWeight(big, 0.1, 0, true);
+  var wBigHigh = generator.effectiveWeight(big, 0.1, 3000, true);
+  assert.ok(wBigHigh > wBig0, 'big piece weight grows with score');
+  var wSmall0 = generator.effectiveWeight(small, 0.1, 0, true);
+  var wSmallHigh = generator.effectiveWeight(small, 0.1, 3000, true);
+  assert.ok(wSmallHigh < wSmall0, 'small piece weight shrinks with score');
+  assert.strictEqual(
+    generator.effectiveWeight(big, 0.1, 3000, false), wBig0,
+    'ramp off: score has no effect'
+  );
+});
+
+/* ---------------- smart interstitial policy ---------------- */
+test('AdPolicy: smart pacing rules', function () {
+  var P = ads.AdPolicy;
+  P.reset();
+  P.newSession();
+  var now = 1000000000000;
+  // Too short a run: no ad.
+  assert.strictEqual(P.shouldShowInterstitial(30, { nowMs: now }), false, 'short run');
+  // Long run, nothing recent: ad allowed.
+  assert.strictEqual(P.shouldShowInterstitial(120, { nowMs: now }), true, 'long run');
+  P.markShown(now);
+  // Gap not elapsed: no ad.
+  assert.strictEqual(
+    P.shouldShowInterstitial(120, { nowMs: now + 60 * 1000, gapMs: 3 * 60 * 1000 }),
+    false, 'gap respected'
+  );
+  // Rewarded ad just watched: interstitial suppressed.
+  P.recordRewarded(now + 4 * 60 * 1000);
+  assert.strictEqual(
+    P.shouldShowInterstitial(120, { nowMs: now + 4 * 60 * 1000 + 1000, gapMs: 60 * 1000 }),
+    false, 'rewarded cooldown suppresses interstitial'
+  );
+  // After cooldown: allowed again.
+  assert.strictEqual(
+    P.shouldShowInterstitial(120, { nowMs: now + 10 * 60 * 1000, gapMs: 60 * 1000 }),
+    true, 'allowed after cooldown'
+  );
+});
+
+test('AdPolicy: per-session cap of 4', function () {
+  var P = ads.AdPolicy;
+  P.reset();
+  P.newSession();
+  var now = 2000000000000;
+  for (var i = 0; i < 4; i++) {
+    assert.strictEqual(P.shouldShowInterstitial(200, { nowMs: now, gapMs: 0 }), true, 'ad ' + (i + 1));
+    P.markShown(now);
+    now += 10 * 60 * 1000;
+  }
+  assert.strictEqual(
+    P.shouldShowInterstitial(200, { nowMs: now, gapMs: 0 }),
+    false, '5th interstitial in a session is blocked'
+  );
+  P.newSession();
+  assert.strictEqual(
+    P.shouldShowInterstitial(200, { nowMs: now, gapMs: 0 }),
+    true, 'new session resets the cap'
+  );
+});
+
+/* ---------------- experiments ---------------- */
+test('experiments: deterministic cohorts within declared variants', function () {
+  var names = experiments.listExperiments();
+  assert.ok(names.indexOf('pity_threshold') !== -1);
+  assert.ok(names.indexOf('ramp_on') !== -1);
+  names.forEach(function (name) {
+    var allowed = experiments.EXPERIMENTS[name];
+    var v1 = experiments.getVariant(name, 'test-player-1');
+    var v2 = experiments.getVariant(name, 'test-player-1');
+    assert.strictEqual(v1, v2, name + ': same player always same variant');
+    assert.ok(allowed.indexOf(v1) !== -1, name + ': variant in declared set');
+  });
+  assert.strictEqual(experiments.getVariant('nope', 'x'), null, 'unknown experiment -> null');
+});
+
+/* ---------------- win-back ---------------- */
+test('winback: grant after 48h away, nothing when recent or first play', function () {
+  var s = monetization._store();
+  s.removeItem('bb_last_play');
+  s.removeItem('bb_powerup_hammer');
+  var H = 3600000;
+  // First ever play: no gift.
+  var r0 = monetization.maybeWinbackGrant(1000000000000);
+  assert.strictEqual(r0.granted, false);
+  assert.strictEqual(r0.reason, 'first-play');
+  // Played 1 hour ago: no gift.
+  s.setItem('bb_last_play', String(1000000000000 - 1 * H));
+  var r1 = monetization.maybeWinbackGrant(1000000000000);
+  assert.strictEqual(r1.granted, false);
+  assert.strictEqual(r1.reason, 'recent');
+  // Played 49 hours ago: gift granted.
+  s.setItem('bb_last_play', String(1000000000000 - 49 * H));
+  var before = monetization.getPowerups('hammer');
+  var r2 = monetization.maybeWinbackGrant(1000000000000);
+  assert.strictEqual(r2.granted, true);
+  assert.strictEqual(monetization.getPowerups('hammer'), before + 1, 'free hammer granted');
+  // Immediately after: no double grant.
+  var r3 = monetization.maybeWinbackGrant(1000000000000 + 1000);
+  assert.strictEqual(r3.granted, false);
+  s.removeItem('bb_last_play');
 });
 
 console.log('\n' + passed + ' tests passed' + (process.exitCode ? ' (WITH FAILURES)' : ''));

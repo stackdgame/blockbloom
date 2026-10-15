@@ -74,9 +74,11 @@
       best: 0,
       history: [],       // snapshots taken BEFORE each placement (max HISTORY_LIMIT)
       moves: 0,
+      movesSinceMultiClear: 0, // moves since the last 2+ line clear (pity timer)
       gameOver: false,
       revivesUsed: 0,
-      runStart: Date.now()
+      runStart: Date.now(),
+      exp: null          // experiment variants for this run, set by main.js
     };
   }
 
@@ -147,7 +149,8 @@
       board: cloneBoard(state.board),
       tray: cloneTray(state.tray),
       score: state.score,
-      combo: state.combo
+      combo: state.combo,
+      movesSinceMultiClear: state.movesSinceMultiClear
     });
     while (state.history.length > HISTORY_LIMIT) state.history.shift();
   }
@@ -164,6 +167,9 @@
     } else {
       state.combo = 0;
     }
+    // Pity timer: counts moves since the last exciting (2+ line) clear.
+    if (lines >= 2) state.movesSinceMultiClear = 0;
+    else state.movesSinceMultiClear += 1;
     state.score += gained;
     return gained;
   }
@@ -231,9 +237,17 @@
     return !anyFit(state.board, pieces);
   }
 
-  /* Deal 3 new pieces using the fair generator. */
+  /* Deal 3 new pieces using the fair generator. Passes run context
+   * (score, pity drought, experiment variants) so the generator can run
+   * the pity timer and the difficulty ramp. */
   function dealTray(state, rng) {
-    state.tray = loadGenerator().drawTray(state.board, rng);
+    var exp = state.exp || {};
+    state.tray = loadGenerator().drawTray(state.board, rng, {
+      score: state.score,
+      movesSinceMultiClear: state.movesSinceMultiClear,
+      pityThreshold: exp.pityThreshold || 12,
+      rampEnabled: exp.rampEnabled !== false
+    });
     return state.tray;
   }
 
@@ -245,6 +259,9 @@
     state.tray = snap.tray;
     state.score = snap.score;
     state.combo = snap.combo;
+    if (typeof snap.movesSinceMultiClear === 'number') {
+      state.movesSinceMultiClear = snap.movesSinceMultiClear;
+    }
     return true;
   }
 

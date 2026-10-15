@@ -8,6 +8,15 @@
   var ads = BB.ads;
   var monetization = BB.monetization;
   var ui = BB.ui;
+  // Fallback defaults if experiments.js failed to load (stale cached page):
+  // control variants, so behavior stays sane.
+  var experiments = BB.experiments || {
+    getVariant: function (name) {
+      var defaults = { pity_threshold: '12', ramp_on: 'on', nearbest_gap: '150', inter_gap_min: '3' };
+      return defaults[name] || null;
+    },
+    listExperiments: function () { return []; }
+  };
   var sound = new BB.audio.SoundFX();
 
   var BEST_KEY = 'bb_best';
@@ -19,6 +28,7 @@
   var state = game.createGame();
   var busy = false;      // true while a clear animation is playing
   var hammerArmed = false;
+  var expVars = { pityThreshold: 12, rampEnabled: true, nearBestGap: 150, interGapMs: 3 * 60 * 1000 };
 
   function loadBest() {
     try { return parseInt(localStorage.getItem(BEST_KEY) || '0', 10) || 0; }
@@ -34,10 +44,15 @@
     var keepBest = state.best;
     state = game.createGame();
     state.best = keepBest;
+    state.exp = {
+      pityThreshold: expVars.pityThreshold,
+      rampEnabled: expVars.rampEnabled
+    };
     busy = false;
     hammerArmed = false;
     ui.setHammerArmed(false);
     game.dealTray(state);
+    monetization.stampLastPlay(Date.now());
     monetization.logEvent('run_start', {});
     ui.renderAll();
     ui.hideGameOver();
@@ -83,10 +98,13 @@
   }
 
   function showGameOverPanel() {
+    var gap = state.best - state.score;
     ui.showGameOver({
       score: state.score,
       best: state.best,
-      revivesLeft: monetization.MAX_REVIVES_PER_RUN - state.revivesUsed
+      revivesLeft: monetization.MAX_REVIVES_PER_RUN - state.revivesUsed,
+      reviveCost: monetization.reviveAdCost(state),
+      nearBestGap: (gap > 0 && gap <= expVars.nearBestGap) ? gap : 0
     });
   }
 
@@ -96,13 +114,13 @@
     ui.setHammerArmed(false);
     if (state.score > state.best) { state.best = state.score; saveBest(); }
     monetization.logEvent('game_over', { score: state.score, moves: state.moves });
-    ads.AdPolicy.recordGameOver();
     showGameOverPanel();
     sound.gameover();
 
-    // Interstitial, frequency-capped, only after game over. Never mid-play.
+    // Interstitial, smart-paced: only after long-enough runs, with gaps,
+    // per-session caps, and suppression after recent rewarded ads.
     var runSec = (Date.now() - state.runStart) / 1000;
-    if (ads.AdPolicy.shouldShowInterstitial(runSec)) {
+    if (ads.AdPolicy.shouldShowInterstitial(runSec, { gapMs: expVars.interGapMs })) {
       setTimeout(function () {
         if (!state.gameOver) return;
         ads.AdPolicy.markShown();
@@ -114,26 +132,31 @@
     }
   }
 
-  /* ---------------- revive (rewarded) ---------------- */
+  /* ---------------- revive (rewarded, escalating) ----------------
+   * 1st revive costs 1 ad view, 2nd costs 2. Any skip aborts the revive. */
   async function onReviveClick() {
     if (busy) return;
+    var cost = monetization.reviveAdCost(state);
     ui.hideGameOver();
-    monetization.logEvent('ad_shown', { slot: 'revive' });
-    var res = await provider.showRewarded('revive');
-    if (res === 'completed') {
-      monetization.logEvent('ad_completed', { slot: 'revive' });
-      var r = monetization.reviveGame(state);
-      if (r.ok) {
-        monetization.logEvent('revive_used', { method: r.method, score: state.score });
-        sound.revive();
-        ui.renderAll();
-        ui.toast('Back in bloom. Your score stayed exactly where it was.');
-      } else {
-        showGameOverPanel(); // revive limit reached
+    for (var i = 0; i < cost; i++) {
+      monetization.logEvent('ad_shown', { slot: 'revive', view: i + 1, of: cost });
+      var res = await provider.showRewarded('revive');
+      if (res !== 'completed') {
+        monetization.logEvent('ad_skipped', { slot: 'revive', view: i + 1, of: cost });
+        showGameOverPanel();
+        return;
       }
+      monetization.logEvent('ad_completed', { slot: 'revive', view: i + 1, of: cost });
+      ads.AdPolicy.recordRewarded();
+    }
+    var r = monetization.reviveGame(state);
+    if (r.ok) {
+      monetization.logEvent('revive_used', { method: r.method, score: state.score, cost: cost });
+      sound.revive();
+      ui.renderAll();
+      ui.toast('Back in bloom. Your score stayed exactly where it was.');
     } else {
-      monetization.logEvent('ad_skipped', { slot: 'revive' });
-      showGameOverPanel();
+      showGameOverPanel(); // revive limit reached
     }
   }
 
@@ -145,6 +168,7 @@
     if (res === 'completed') {
       var total = monetization.addPowerups(kind, monetization.POWERUP_REFILL_AMOUNT);
       monetization.logEvent('ad_completed', { slot: 'powerup_' + kind });
+      ads.AdPolicy.recordRewarded();
       monetization.logEvent('powerup_earned', { kind: kind, amount: monetization.POWERUP_REFILL_AMOUNT, total: total });
       sound.powerup();
       ui.renderPowerups();
@@ -188,6 +212,18 @@
 
   /* ---------------- boot ---------------- */
   function boot() {
+    // A/B cohorts: deterministic per player, exposures logged for analysis.
+    expVars = {
+      pityThreshold: parseInt(experiments.getVariant('pity_threshold'), 10) || 12,
+      rampEnabled: experiments.getVariant('ramp_on') === 'on',
+      nearBestGap: parseInt(experiments.getVariant('nearbest_gap'), 10) || 150,
+      interGapMs: (parseInt(experiments.getVariant('inter_gap_min'), 10) || 3) * 60 * 1000
+    };
+    experiments.listExperiments().forEach(function (name) {
+      monetization.logEvent('exp_exposure', { exp: name, variant: experiments.getVariant(name) });
+    });
+    ads.AdPolicy.newSession();
+
     ui.init({
       getState: function () { return state; },
       game: game,
@@ -229,7 +265,13 @@
       window.removeEventListener('pointerdown', unlock);
     });
 
+    // Win-back: returning after 48h+ away earns a free hammer, no ad.
+    var wb = monetization.maybeWinbackGrant(Date.now());
     newGame();
+    if (wb.granted) {
+      ui.renderPowerups();
+      ui.toast('Welcome back! A free hammer is yours.');
+    }
   }
 
   function $(id) { return document.getElementById(id); }

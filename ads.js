@@ -22,16 +22,34 @@
  * Interstitials never interrupt active play.
  */
 (function () {
-  var INTERSTITIAL_MIN_RUN_SEC = 60;
-  var INTERSTITIAL_MIN_GAP_MS = 4 * 60 * 1000;
-  var INTERSTITIAL_MIN_GAMEOVERS = 3;
+  /* ---------------- AdPolicy ----------------
+   * Smart interstitial pacing:
+   *  - only after game over (never interrupts active play)
+   *  - the run lasted at least INTERSTITIAL_MIN_RUN_SEC seconds
+   *  - at least interGapMs since the last interstitial (experiment-tuned)
+   *  - SKIPPED when the player watched a rewarded ad in the last
+   *    REWARDED_COOLDOWN_MS: engaged players get fewer forced ads, which
+   *    keeps them around to watch more chosen (higher-eCPM) rewarded ads
+   *  - at most INTERSTITIAL_MAX_PER_SESSION per session
+   *  - disabled entirely when remove-ads is active
+   */
+  var INTERSTITIAL_MIN_RUN_SEC = 90;
+  var INTERSTITIAL_DEFAULT_GAP_MS = 3 * 60 * 1000;
+  var INTERSTITIAL_MAX_PER_SESSION = 4;
+  var REWARDED_COOLDOWN_MS = 5 * 60 * 1000;
   var DEMO_COUNTDOWN_SEC = 5;
 
+  var memoryStore = {};
   function store() {
     try {
       if (typeof localStorage !== 'undefined') return localStorage;
     } catch (e) { /* fall through */ }
-    return null;
+    return {
+      getItem: function (k) { return Object.prototype.hasOwnProperty.call(memoryStore, k) ? memoryStore[k] : null; },
+      setItem: function (k, v) { memoryStore[k] = String(v); },
+      removeItem: function (k) { delete memoryStore[k]; },
+      _clear: function () { for (var k in memoryStore) delete memoryStore[k]; }
+    };
   }
 
   /* ---------------- DemoAdsProvider ---------------- */
@@ -109,18 +127,25 @@
   };
 
   /* ---------------- AdPolicy ---------------- */
-  var POLICY_KEY = 'bb_adpolicy';
+  var POLICY_KEY = 'bb_adpolicy_v2';
 
   function loadPolicy() {
     var s = store();
-    var def = { lastInterstitialAt: 0, gameOversSinceAd: 0 };
+    var def = {
+      lastInterstitialAt: 0,
+      lastRewardedAt: 0,
+      sessionInterstitials: 0,
+      sessionId: 0
+    };
     if (!s) return def;
     try {
       var raw = JSON.parse(s.getItem(POLICY_KEY) || 'null');
       if (raw && typeof raw === 'object') {
         return {
           lastInterstitialAt: raw.lastInterstitialAt || 0,
-          gameOversSinceAd: raw.gameOversSinceAd || 0
+          lastRewardedAt: raw.lastRewardedAt || 0,
+          sessionInterstitials: raw.sessionInterstitials || 0,
+          sessionId: raw.sessionId || 0
         };
       }
     } catch (e) { /* fall through */ }
@@ -144,36 +169,51 @@
 
   var AdPolicy = {
     INTERSTITIAL_MIN_RUN_SEC: INTERSTITIAL_MIN_RUN_SEC,
-    INTERSTITIAL_MIN_GAP_MS: INTERSTITIAL_MIN_GAP_MS,
-    INTERSTITIAL_MIN_GAMEOVERS: INTERSTITIAL_MIN_GAMEOVERS,
+    INTERSTITIAL_DEFAULT_GAP_MS: INTERSTITIAL_DEFAULT_GAP_MS,
+    INTERSTITIAL_MAX_PER_SESSION: INTERSTITIAL_MAX_PER_SESSION,
+    REWARDED_COOLDOWN_MS: REWARDED_COOLDOWN_MS,
 
-    recordGameOver: function () {
+    /* Call once per app boot. Resets the per-session interstitial counter. */
+    newSession: function () {
       var p = loadPolicy();
-      p.gameOversSinceAd += 1;
+      p.sessionId = Date.now();
+      p.sessionInterstitials = 0;
       savePolicy(p);
       return p;
     },
 
-    shouldShowInterstitial: function (runDurationSec, nowMs) {
+    /* Call whenever a rewarded ad completes: suppresses interstitials
+     * for REWARDED_COOLDOWN_MS. */
+    recordRewarded: function (nowMs) {
+      var p = loadPolicy();
+      p.lastRewardedAt = (typeof nowMs === 'number') ? nowMs : Date.now();
+      savePolicy(p);
+      return p;
+    },
+
+    shouldShowInterstitial: function (runDurationSec, opts) {
+      opts = opts || {};
       if (isRemoveAdsActive()) return false;
       if (!(runDurationSec > INTERSTITIAL_MIN_RUN_SEC)) return false;
+      var gapMs = opts.gapMs || INTERSTITIAL_DEFAULT_GAP_MS;
+      var now = (typeof opts.nowMs === 'number') ? opts.nowMs : Date.now();
       var p = loadPolicy();
-      var now = (typeof nowMs === 'number') ? nowMs : Date.now();
-      if (now - p.lastInterstitialAt < INTERSTITIAL_MIN_GAP_MS) return false;
-      if (p.gameOversSinceAd < INTERSTITIAL_MIN_GAMEOVERS) return false;
+      if (now - p.lastInterstitialAt < gapMs) return false;
+      if (p.sessionInterstitials >= INTERSTITIAL_MAX_PER_SESSION) return false;
+      if (now - p.lastRewardedAt < REWARDED_COOLDOWN_MS) return false;
       return true;
     },
 
     markShown: function (nowMs) {
       var p = loadPolicy();
       p.lastInterstitialAt = (typeof nowMs === 'number') ? nowMs : Date.now();
-      p.gameOversSinceAd = 0;
+      p.sessionInterstitials += 1;
       savePolicy(p);
       return p;
     },
 
     reset: function () {
-      savePolicy({ lastInterstitialAt: 0, gameOversSinceAd: 0 });
+      savePolicy({ lastInterstitialAt: 0, lastRewardedAt: 0, sessionInterstitials: 0, sessionId: 0 });
     }
   };
 

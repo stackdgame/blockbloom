@@ -394,9 +394,24 @@
   function showGameOver(info) {
     els.goScore.textContent = String(info.score);
     els.goBest.textContent = String(info.best);
-    els.reviveLabel.textContent = info.revivesLeft > 0
-      ? 'Watch ad to keep going (' + info.revivesLeft + ' left)'
-      : 'Revive used up';
+    // Near-best prompt: an honest, high-converting nudge when the player
+    // died close to their record. Guarded for stale cached HTML.
+    var near = $('go-nearbest');
+    if (near) {
+      if (info.nearBestGap > 0) {
+        near.textContent = 'So close! Just ' + info.nearBestGap + ' points from your best.';
+        near.hidden = false;
+      } else {
+        near.hidden = true;
+      }
+    }
+    if (info.revivesLeft > 0) {
+      els.reviveLabel.textContent = info.reviveCost > 1
+        ? 'Watch 2 ads for one last revive'
+        : 'Watch ad to keep going (' + info.revivesLeft + ' left)';
+    } else {
+      els.reviveLabel.textContent = 'Revives used up';
+    }
     $('btn-revive').disabled = info.revivesLeft <= 0;
     els.gameover.hidden = false;
   }

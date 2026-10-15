@@ -20,11 +20,13 @@
   var game = loadApi('./game.js', 'game');
   var generator = loadApi('./generator.js', 'generator');
 
-  var MAX_REVIVES_PER_RUN = 1;
+  var MAX_REVIVES_PER_RUN = 2; // 1st revive: 1 ad view, 2nd revive: 2 ad views
   var REVIVE_CLEAR_CELLS = 14; // used when history is too short for a snapshot restore
   var POWERUP_START_COUNT = 3;
   var POWERUP_REFILL_AMOUNT = 3;
   var ANALYTICS_RING_MAX = 100;
+  var WINBACK_HOURS = 48;
+  var WINBACK_HAMMERS = 1;
 
   /* Storage that works in browsers and in Node (in-memory fallback). */
   var memoryStore = {};
@@ -101,13 +103,16 @@
   }
 
   /* ---------- revive ----------
-   * Rewarded revive (player's choice, after watching an ad):
-   *  - max 1 revive per run
+   * Rewarded revive (player's choice, after watching ads):
+   *  - max 2 revives per run; the 1st costs 1 ad view, the 2nd costs 2
    *  - restores the board to the state 3 moves ago (history snapshot taken
    *    before that placement), or clears REVIVE_CLEAR_CELLS random filled
    *    cells when fewer than 3 moves are in history
    *  - keeps 100% of the score (never takes score away)
    *  - combo resets to 0; tray is redealt fairly; gameOver clears */
+  function reviveAdCost(state) {
+    return state.revivesUsed === 0 ? 1 : 2;
+  }
   function clearRandomCells(board, count, rng) {
     rng = rng || Math.random;
     var filled = [];
@@ -148,11 +153,40 @@
     return { ok: true, method: method };
   }
 
+  /* ---------- win-back ----------
+   * If the player returns after more than WINBACK_HOURS away, grant a free
+   * hammer on open. Honest retention: a gift, never an ad. */
+  var LAST_PLAY_KEY = 'bb_last_play';
+
+  function getLastPlay() {
+    var raw = store().getItem(LAST_PLAY_KEY);
+    var n = parseInt(raw || '0', 10);
+    return isNaN(n) ? 0 : n;
+  }
+
+  function stampLastPlay(nowMs) {
+    try { store().setItem(LAST_PLAY_KEY, String(typeof nowMs === 'number' ? nowMs : Date.now())); } catch (e) { /* ignore */ }
+  }
+
+  function maybeWinbackGrant(nowMs) {
+    var now = (typeof nowMs === 'number') ? nowMs : Date.now();
+    var last = getLastPlay();
+    if (!last) return { granted: false, reason: 'first-play' };
+    if (now - last > WINBACK_HOURS * 60 * 60 * 1000) {
+      addPowerups('hammer', WINBACK_HAMMERS);
+      stampLastPlay(now);
+      logEvent('winback_grant', { hammers: WINBACK_HAMMERS, hoursAway: Math.round((now - last) / 3600000) });
+      return { granted: true, hammers: WINBACK_HAMMERS };
+    }
+    return { granted: false, reason: 'recent' };
+  }
+
   var api = {
     MAX_REVIVES_PER_RUN: MAX_REVIVES_PER_RUN,
     REVIVE_CLEAR_CELLS: REVIVE_CLEAR_CELLS,
     POWERUP_START_COUNT: POWERUP_START_COUNT,
     POWERUP_REFILL_AMOUNT: POWERUP_REFILL_AMOUNT,
+    WINBACK_HOURS: WINBACK_HOURS,
     logEvent: logEvent,
     getAnalyticsEvents: getAnalyticsEvents,
     getPowerups: getPowerups,
@@ -162,7 +196,11 @@
     hasRemoveAds: hasRemoveAds,
     setRemoveAds: setRemoveAds,
     clearRandomCells: clearRandomCells,
+    reviveAdCost: reviveAdCost,
     reviveGame: reviveGame,
+    getLastPlay: getLastPlay,
+    stampLastPlay: stampLastPlay,
+    maybeWinbackGrant: maybeWinbackGrant,
     _store: store // exposed for tests
   };
 
