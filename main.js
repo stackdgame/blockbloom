@@ -20,6 +20,7 @@
   var sound = new BB.audio.SoundFX();
 
   var BEST_KEY = 'bb_best';
+  var BEST_MOVES_KEY = 'bb_best_moves';
   var CLEAR_ANIM_MS = 200;
 
   var provider = new ads.DemoAdsProvider();
@@ -37,13 +38,30 @@
   function saveBest() {
     try { localStorage.setItem(BEST_KEY, String(state.best)); } catch (e) {}
   }
+  function loadBestMoves() {
+    try { return parseInt(localStorage.getItem(BEST_MOVES_KEY) || '0', 10) || 0; }
+    catch (e) { return 0; }
+  }
+  function saveBestMoves() {
+    try { localStorage.setItem(BEST_MOVES_KEY, String(state.bestMoves)); } catch (e) {}
+  }
   state.best = loadBest();
+  state.bestMoves = loadBestMoves();
+
+  /* Best-pace indicator: gold score glow while the current run is scoring
+   * faster per move than the record run did. Honest, from real numbers. */
+  function isOnPace() {
+    if (!state.best || !state.bestMoves || state.moves === 0) return false;
+    return (state.score / state.moves) > (state.best / state.bestMoves);
+  }
 
   /* ---------------- game flow ---------------- */
   function newGame() {
     var keepBest = state.best;
+    var keepBestMoves = state.bestMoves;
     state = game.createGame();
     state.best = keepBest;
+    state.bestMoves = keepBestMoves;
     state.exp = {
       pityThreshold: expVars.pityThreshold,
       rampEnabled: expVars.rampEnabled
@@ -51,15 +69,19 @@
     busy = false;
     hammerArmed = false;
     ui.setHammerArmed(false);
+    ui.endFever();
+    ui.setPaceHot(false);
     game.dealTray(state);
     monetization.stampLastPlay(Date.now());
     monetization.logEvent('run_start', {});
     ui.renderAll();
+    ui.renderDailyGoal();
     ui.hideGameOver();
   }
 
   function handlePlace(trayIdx, r, c) {
     if (busy || state.gameOver) return;
+    var feverBefore = game.isFeverActive(state);
     var res = game.placePiece(state, trayIdx, r, c);
     if (!res.ok) { ui.renderTray(); return; }
 
@@ -69,8 +91,28 @@
     ui.flashPlaced(res.placedCells);
     ui.renderTray();
     ui.updateScore(true);
+    ui.setPaceHot(isOnPace());
+
+    // Fever trigger: the streak just completed.
+    if (!feverBefore && game.isFeverActive(state)) {
+      monetization.logEvent('fever_start', { score: state.score });
+      sound.combo(3);
+      ui.startFever(game.FEVER_DURATION_MS);
+      ui.toast('FEVER! Double clear points for 30 seconds.');
+    }
 
     if (res.lines > 0) {
+      // Daily goal + lifetime lines + theme unlocks.
+      var dg = monetization.progressDailyGoal(res.lines, Date.now());
+      var unlocked = monetization.addLifetimeLines(res.lines);
+      ui.renderDailyGoal();
+      if (dg.completed) {
+        ui.toast('Daily goal complete! Tap the bar to claim +3 hammers.');
+      } else if (unlocked.length) {
+        var names = unlocked.map(function (id) { return monetization.themeById(id).name; });
+        ui.toast('New theme unlocked: ' + names.join(', ') + '! Tap the palette to try it.');
+      }
+
       sound.clear(res.lines);
       if (state.combo >= 2) sound.combo(state.combo);
       ui.animateClears(res.clearedPreview, res.lines, state.combo, res.gained);
@@ -103,7 +145,8 @@
       score: state.score,
       best: state.best,
       revivesLeft: monetization.MAX_REVIVES_PER_RUN - state.revivesUsed,
-      reviveCost: monetization.reviveAdCost(state),
+      reviveCost: monetization.reviveAdCost(state, Date.now()),
+      freeRevive: state.revivesUsed === 0 && monetization.isFreeReviveAvailable(Date.now()),
       nearBestGap: (gap > 0 && gap <= expVars.nearBestGap) ? gap : 0
     });
   }
@@ -112,7 +155,14 @@
     state.gameOver = true;
     hammerArmed = false;
     ui.setHammerArmed(false);
-    if (state.score > state.best) { state.best = state.score; saveBest(); }
+    ui.endFever();
+    ui.setPaceHot(false);
+    if (state.score > state.best) {
+      state.best = state.score;
+      state.bestMoves = state.moves;
+      saveBest();
+      saveBestMoves();
+    }
     monetization.logEvent('game_over', { score: state.score, moves: state.moves });
     showGameOverPanel();
     sound.gameover();
@@ -136,7 +186,15 @@
    * 1st revive costs 1 ad view, 2nd costs 2. Any skip aborts the revive. */
   async function onReviveClick() {
     if (busy) return;
-    var cost = monetization.reviveAdCost(state);
+    // Free daily revive: first revive of the day costs no ad.
+    if (state.revivesUsed === 0 && monetization.isFreeReviveAvailable(Date.now())) {
+      monetization.useFreeRevive(Date.now());
+      monetization.logEvent('free_revive_used', { score: state.score });
+      ui.hideGameOver();
+      doRevive(0);
+      return;
+    }
+    var cost = monetization.reviveAdCost(state, Date.now());
     ui.hideGameOver();
     for (var i = 0; i < cost; i++) {
       monetization.logEvent('ad_shown', { slot: 'revive', view: i + 1, of: cost });
@@ -149,12 +207,18 @@
       monetization.logEvent('ad_completed', { slot: 'revive', view: i + 1, of: cost });
       ads.AdPolicy.recordRewarded();
     }
+    doRevive(cost);
+  }
+
+  function doRevive(cost) {
     var r = monetization.reviveGame(state);
     if (r.ok) {
-      monetization.logEvent('revive_used', { method: r.method, score: state.score, cost: cost });
+      monetization.logEvent('revive_used', { method: r.method, score: state.score, cost: cost, free: cost === 0 });
       sound.revive();
       ui.renderAll();
-      ui.toast('Back in bloom. Your score stayed exactly where it was.');
+      ui.toast(cost === 0
+        ? 'Free revive! Your first one today is on the house.'
+        : 'Back in bloom. Your score stayed exactly where it was.');
     } else {
       showGameOverPanel(); // revive limit reached
     }
@@ -210,8 +274,43 @@
     monetization.logEvent('powerup_used', { kind: 'hammer' });
   }
 
+  /* ---------------- themes ---------------- */
+  function onThemePick(id) {
+    if (monetization.setTheme(id)) {
+      ui.applyTheme(id);
+      ui.renderThemes();
+      sound.powerup();
+      ui.toast(monetization.themeById(id).name + ' theme on.');
+    }
+  }
+
+  /* ---------------- daily goal claim (rewarded) ---------------- */
+  async function onGoalClaim() {
+    if (busy) return;
+    monetization.logEvent('ad_shown', { slot: 'daily_goal' });
+    var res = await provider.showRewarded('daily_goal');
+    if (res === 'completed') {
+      if (monetization.claimDailyGoal(Date.now())) {
+        monetization.logEvent('ad_completed', { slot: 'daily_goal' });
+        ads.AdPolicy.recordRewarded();
+        sound.powerup();
+        ui.hideGoalClaim();
+        ui.renderDailyGoal();
+        ui.renderPowerups();
+        ui.toast('+' + monetization.DAILY_GOAL_REWARD + ' hammers. See you tomorrow.');
+      } else {
+        ui.hideGoalClaim();
+      }
+    } else {
+      monetization.logEvent('ad_skipped', { slot: 'daily_goal' });
+      ui.hideGoalClaim();
+    }
+  }
+
   /* ---------------- boot ---------------- */
   function boot() {
+    // Apply the saved block theme before first paint.
+    ui.applyTheme(monetization.getTheme());
     // A/B cohorts: deterministic per player, exposures logged for analysis.
     expVars = {
       pityThreshold: parseInt(experiments.getVariant('pity_threshold'), 10) || 12,
@@ -231,7 +330,8 @@
       onPlace: handlePlace,
       onBoardTap: onBoardTap,
       isBusy: function () { return busy; },
-      isHammerArmed: function () { return hammerArmed; }
+      isHammerArmed: function () { return hammerArmed; },
+      onThemePick: onThemePick
     });
 
     $('btn-restart').addEventListener('click', newGame);
@@ -241,6 +341,16 @@
     $('btn-undo').addEventListener('click', onUndoClick);
     $('btn-hammer-refill').addEventListener('click', function () { refillPowerup('hammer'); });
     $('btn-undo-refill').addEventListener('click', function () { refillPowerup('undo'); });
+    $('btn-theme').addEventListener('click', function () { ui.showThemeSheet(); });
+    $('btn-theme-close').addEventListener('click', function () { ui.hideThemeSheet(); });
+
+    // Daily goal bar: tap to claim when complete.
+    $('daily-goal-wrap').addEventListener('click', function () {
+      var g = monetization.getDailyGoal(Date.now());
+      if (g.lines >= monetization.DAILY_GOAL_LINES && !g.claimed) ui.showGoalClaim();
+    });
+    $('btn-goal-claim').addEventListener('click', onGoalClaim);
+    $('btn-goal-later').addEventListener('click', function () { ui.hideGoalClaim(); });
     $('btn-mute').addEventListener('click', function () {
       var muted = sound.toggle();
       $('btn-mute').textContent = muted ? '🔇' : '🔊';

@@ -453,3 +453,181 @@ html, body {
   .icon-btn { width: 42px; height: 42px; font-size: 19px; }
   .score-box { min-width: 56px; }
 }
+
+/* ---------- fever mode ---------- */
+#fever-banner {
+  position: absolute;
+  left: 50%;
+  top: 10px;
+  transform: translateX(-50%);
+  background: linear-gradient(180deg, #ff5c5c, #ff9f1c);
+  color: #fff;
+  font-weight: 900;
+  font-size: 15px;
+  letter-spacing: 1px;
+  padding: 6px 18px;
+  border-radius: 999px;
+  box-shadow: 0 0 20px rgba(255, 120, 40, 0.85);
+  z-index: 5;
+  pointer-events: none;
+  animation: feverPulse 0.5s ease-in-out infinite alternate;
+  white-space: nowrap;
+}
+#fever-banner[hidden] { display: none; }
+@keyframes feverPulse {
+  from { transform: translateX(-50%) scale(1); }
+  to { transform: translateX(-50%) scale(1.1); }
+}
+#board-wrap.fever #board {
+  box-shadow: 0 0 30px rgba(255, 150, 40, 0.55), inset 0 2px 8px rgba(0, 0, 0, 0.35);
+}
+
+/* ---------- daily goal ---------- */
+#daily-goal-wrap {
+  position: relative;
+  width: 100%;
+  max-width: 420px;
+  height: 26px;
+  background: rgba(27, 39, 72, 0.75);
+  border-radius: 999px;
+  margin: 10px 0 2px;
+  overflow: hidden;
+  box-shadow: inset 0 2px 6px rgba(0, 0, 0, 0.3);
+}
+#daily-goal-wrap.claimable {
+  cursor: pointer;
+  box-shadow: 0 0 14px rgba(255, 211, 42, 0.55);
+  animation: feverPulse2 0.8s ease-in-out infinite alternate;
+}
+@keyframes feverPulse2 {
+  from { transform: scale(1); }
+  to { transform: scale(1.02); }
+}
+#daily-goal-fill {
+  position: absolute;
+  inset: 0;
+  width: 0%;
+  background: linear-gradient(90deg, #2ed573, #a5e075);
+  border-radius: 999px;
+  transition: width 0.4s ease;
+}
+#daily-goal-text {
+  position: absolute;
+  inset: 0;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  font-size: 11px;
+  font-weight: 800;
+  color: #fff;
+  text-shadow: 0 1px 3px rgba(0, 0, 0, 0.65);
+}
+
+/* ---------- best-pace indicator ---------- */
+.score-box.pace-hot .score-value {
+  color: var(--gold);
+  text-shadow: 0 0 14px rgba(255, 211, 42, 0.75);
+}
+
+/* ---------- theme sheet ---------- */
+#theme-overlay {
+  position: fixed;
+  inset: 0;
+  background: rgba(5, 8, 18, 0.72);
+  z-index: 70;
+  display: flex;
+  align-items: flex-end;
+  justify-content: center;
+  padding: 20px;
+}
+#theme-overlay[hidden] { display: none; }
+.sheet-card {
+  background: var(--panel);
+  border-radius: 24px;
+  padding: 22px;
+  width: 100%;
+  max-width: 380px;
+  border: 1px solid rgba(143, 160, 200, 0.16);
+  box-shadow: var(--shadow);
+  animation: cardIn 0.25s ease;
+}
+.sheet-card h3 { margin: 0 0 2px; font-size: 20px; }
+.sheet-sub { color: var(--ink-soft); font-size: 13px; margin: 0 0 14px; }
+#theme-swatches {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: 10px;
+  margin-bottom: 14px;
+}
+.theme-swatch {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  background: var(--cell);
+  border: 2px solid transparent;
+  border-radius: 14px;
+  padding: 10px;
+  cursor: pointer;
+  color: var(--ink);
+  font-family: inherit;
+}
+.theme-swatch.active { border-color: var(--gold); }
+.theme-swatch.locked { opacity: 0.55; cursor: default; }
+.theme-swatch .sw {
+  display: grid;
+  grid-template-columns: repeat(2, 14px);
+  grid-template-rows: repeat(2, 14px);
+  gap: 1px;
+  flex-shrink: 0;
+}
+.theme-swatch .sw i {
+  width: 14px;
+  height: 14px;
+  border-radius: 4px;
+  background: linear-gradient(180deg, var(--b1), var(--b2) 60%, var(--b3));
+  box-shadow: inset 1px 1px 0 rgba(255, 255, 255, 0.35), inset -1px -1px 0 rgba(0, 0, 0, 0.25);
+}
+.theme-swatch .tname { font-weight: 800; font-size: 14px; }
+.theme-swatch .tlock { margin-left: auto; font-size: 11px; color: var(--ink-soft); }
+
+/* ---------- goal claim overlay ---------- */
+#goal-overlay {
+  position: fixed;
+  inset: 0;
+  background: rgba(5, 8, 18, 0.72);
+  backdrop-filter: blur(3px);
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  z-index: 70;
+  padding: 20px;
+}
+#goal-overlay[hidden] { display: none; }
+
+/* ---------- alternate block themes (override candy palette) ---------- */
+body.theme-neon .c1, .theme-prev-neon .c1 { --b1: #ff8fb3; --b2: #ff2e63; --b3: #cc1f4e; }
+body.theme-neon .c2, .theme-prev-neon .c2 { --b1: #ffc46b; --b2: #ff9f1c; --b3: #d17a00; }
+body.theme-neon .c3, .theme-prev-neon .c3 { --b1: #5cffb1; --b2: #00e676; --b3: #00a854; }
+body.theme-neon .c4, .theme-prev-neon .c4 { --b1: #6bc4ff; --b2: #1e90ff; --b3: #0f66c4; }
+body.theme-neon .c5, .theme-prev-neon .c5 { --b1: #d0a2ff; --b2: #a855f7; --b3: #7e22ce; }
+body.theme-neon .c6, .theme-prev-neon .c6 { --b1: #ffef8a; --b2: #ffe135; --b3: #d4af00; }
+body.theme-neon .c7, .theme-prev-neon .c7 { --b1: #5ffbf1; --b2: #00e5cc; --b3: #00a896; }
+body.theme-neon .c8, .theme-prev-neon .c8 { --b1: #ff9ff3; --b2: #f368e0; --b3: #c445b8; }
+
+body.theme-pastel .c1, .theme-prev-pastel .c1 { --b1: #ffd3e0; --b2: #ffb3c9; --b3: #f08bb0; }
+body.theme-pastel .c2, .theme-prev-pastel .c2 { --b1: #ffe3b3; --b2: #ffd08a; --b3: #f0b45e; }
+body.theme-pastel .c3, .theme-prev-pastel .c3 { --b1: #c9f2d8; --b2: #a8e6bf; --b3: #7fcfa0; }
+body.theme-pastel .c4, .theme-prev-pastel .c4 { --b1: #cfe8ff; --b2: #aed6ff; --b3: #86bdf0; }
+body.theme-pastel .c5, .theme-prev-pastel .c5 { --b1: #e3d4ff; --b2: #cdb4f5; --b3: #ab8fe0; }
+body.theme-pastel .c6, .theme-prev-pastel .c6 { --b1: #fff3b0; --b2: #ffec8a; --b3: #f0d45e; }
+body.theme-pastel .c7, .theme-prev-pastel .c7 { --b1: #c2f5ec; --b2: #9fe8da; --b3: #6fd3c2; }
+body.theme-pastel .c8, .theme-prev-pastel .c8 { --b1: #ffd6f2; --b2: #ffb3e8; --b3: #f08ed4; }
+
+body.theme-gold .c1, .theme-prev-gold .c1 { --b1: #ff9d8a; --b2: #e8735a; --b3: #b34a34; }
+body.theme-gold .c2, .theme-prev-gold .c2 { --b1: #ffcf7d; --b2: #f0a840; --b3: #c07f1f; }
+body.theme-gold .c3, .theme-prev-gold .c3 { --b1: #e8d47d; --b2: #d4af37; --b3: #a8862a; }
+body.theme-gold .c4, .theme-prev-gold .c4 { --b1: #a8c8e8; --b2: #7ba7d4; --b3: #5a84b3; }
+body.theme-gold .c5, .theme-prev-gold .c5 { --b1: #d4a8e8; --b2: #b07cc6; --b3: #8a5a9e; }
+body.theme-gold .c6, .theme-prev-gold .c6 { --b1: #ffe89d; --b2: #ffd700; --b3: #ccaa00; }
+body.theme-gold .c7, .theme-prev-gold .c7 { --b1: #9fe0d0; --b2: #6fc2ae; --b3: #4f9a86; }
+body.theme-gold .c8, .theme-prev-gold .c8 { --b1: #f0a8c8; --b2: #d47fa5; --b3: #a85a7f; }

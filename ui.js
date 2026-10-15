@@ -390,7 +390,100 @@
     toastTimer = setTimeout(function () { els.toast.classList.remove('show'); }, 2600);
   }
 
-  /* ---------------- panels ---------------- */
+  /* ---------------- fever mode ---------------- */
+  var feverTimer = 0;
+  function startFever(durationMs) {
+    els.boardWrap.classList.add('fever');
+    var banner = $('fever-banner');
+    banner.hidden = false;
+    banner.classList.remove('show');
+    void banner.offsetWidth;
+    banner.classList.add('show');
+    clearTimeout(feverTimer);
+    feverTimer = setTimeout(endFever, durationMs || 30000);
+  }
+  function endFever() {
+    clearTimeout(feverTimer);
+    els.boardWrap.classList.remove('fever');
+    $('fever-banner').hidden = true;
+  }
+
+  /* ---------------- best-pace indicator ---------------- */
+  function setPaceHot(hot) {
+    var box = $('score-box');
+    if (box) box.classList.toggle('pace-hot', !!hot);
+  }
+
+  /* ---------------- daily goal ---------------- */
+  function renderDailyGoal() {
+    var BB = globalThis.BlockBloom;
+    var g = BB.monetization.getDailyGoal(Date.now());
+    var target = BB.monetization.DAILY_GOAL_LINES;
+    var pct = Math.min(100, Math.round((g.lines / target) * 100));
+    $('daily-goal-fill').style.width = pct + '%';
+    var label = $('daily-goal-text');
+    if (g.lines >= target && !g.claimed) {
+      label.textContent = 'Goal complete! Tap to claim';
+      $('daily-goal-wrap').classList.add('claimable');
+    } else if (g.claimed) {
+      label.textContent = 'Daily goal claimed';
+      $('daily-goal-wrap').classList.remove('claimable');
+    } else {
+      label.textContent = 'Daily: ' + g.lines + '/' + target + ' lines';
+      $('daily-goal-wrap').classList.remove('claimable');
+    }
+  }
+
+  function showGoalClaim() {
+    $('goal-overlay').hidden = false;
+  }
+  function hideGoalClaim() {
+    $('goal-overlay').hidden = true;
+  }
+
+  /* ---------------- themes ---------------- */
+  function applyTheme(id) {
+    document.body.classList.remove('theme-neon', 'theme-pastel', 'theme-gold');
+    if (id && id !== 'bloom') document.body.classList.add('theme-' + id);
+  }
+
+  function renderThemes() {
+    var BB = globalThis.BlockBloom;
+    var wrap = $('theme-swatches');
+    wrap.innerHTML = '';
+    var unlocked = BB.monetization.getUnlockedThemes();
+    var current = BB.monetization.getTheme();
+    var lifetime = BB.monetization.getLifetimeLines();
+    BB.monetization.THEMES.forEach(function (t) {
+      var ok = unlocked.indexOf(t.id) !== -1;
+      var d = document.createElement('button');
+      d.className = 'theme-swatch theme-prev-' + t.id + (ok ? '' : ' locked') + (t.id === current ? ' active' : '');
+      d.setAttribute('aria-label', t.name + (ok ? '' : ', locked'));
+      d.innerHTML = '<span class="sw">' +
+        '<i class="c1"></i><i class="c2"></i><i class="c3"></i><i class="c4"></i>' +
+        '</span><span class="tname">' + t.name + '</span>' +
+        (ok ? '' : '<span class="tlock">' + t.lines + ' lines</span>');
+      if (ok) {
+        (function (id) {
+          d.addEventListener('click', function () {
+            if (ctx.onThemePick) ctx.onThemePick(id);
+          });
+        })(t.id);
+      } else {
+        d.disabled = true;
+        d.title = 'Clear ' + t.lines + ' lifetime lines to unlock (' + lifetime + ' so far)';
+      }
+      wrap.appendChild(d);
+    });
+  }
+
+  function showThemeSheet() {
+    renderThemes();
+    $('theme-overlay').hidden = false;
+  }
+  function hideThemeSheet() {
+    $('theme-overlay').hidden = true;
+  }
   function showGameOver(info) {
     els.goScore.textContent = String(info.score);
     els.goBest.textContent = String(info.best);
@@ -406,9 +499,13 @@
       }
     }
     if (info.revivesLeft > 0) {
-      els.reviveLabel.textContent = info.reviveCost > 1
-        ? 'Watch 2 ads for one last revive'
-        : 'Watch ad to keep going (' + info.revivesLeft + ' left)';
+      if (info.freeRevive) {
+        els.reviveLabel.textContent = 'Revive FREE (today\u2019s gift)';
+      } else if (info.reviveCost > 1) {
+        els.reviveLabel.textContent = 'Watch 2 ads for one last revive';
+      } else {
+        els.reviveLabel.textContent = 'Watch ad to keep going (' + info.revivesLeft + ' left)';
+      }
     } else {
       els.reviveLabel.textContent = 'Revives used up';
     }
@@ -438,6 +535,16 @@
   api.showGameOver = showGameOver;
   api.hideGameOver = hideGameOver;
   api.setHammerArmed = setHammerArmed;
+  api.startFever = startFever;
+  api.endFever = endFever;
+  api.setPaceHot = setPaceHot;
+  api.renderDailyGoal = renderDailyGoal;
+  api.showGoalClaim = showGoalClaim;
+  api.hideGoalClaim = hideGoalClaim;
+  api.applyTheme = applyTheme;
+  api.renderThemes = renderThemes;
+  api.showThemeSheet = showThemeSheet;
+  api.hideThemeSheet = hideThemeSheet;
   api.COLORS = COLORS;
   api.layoutBoard = layoutBoard;
 

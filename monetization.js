@@ -110,7 +110,8 @@
    *    cells when fewer than 3 moves are in history
    *  - keeps 100% of the score (never takes score away)
    *  - combo resets to 0; tray is redealt fairly; gameOver clears */
-  function reviveAdCost(state) {
+  function reviveAdCost(state, nowMs) {
+    if (state.revivesUsed === 0 && isFreeReviveAvailable(nowMs)) return 0;
     return state.revivesUsed === 0 ? 1 : 2;
   }
   function clearRandomCells(board, count, rng) {
@@ -181,6 +182,129 @@
     return { granted: false, reason: 'recent' };
   }
 
+  /* ---------- free daily revive ----------
+   * The first revive each calendar day is free (no ad). Teaches the revive
+   * habit; later revives that day use the escalating ad pricing. */
+  var FREE_REVIVE_KEY = 'bb_free_revive_date';
+
+  function todayStr(nowMs) {
+    var d = new Date(typeof nowMs === 'number' ? nowMs : Date.now());
+    var m = d.getMonth() + 1, day = d.getDate();
+    return d.getFullYear() + '-' + (m < 10 ? '0' : '') + m + '-' + (day < 10 ? '0' : '') + day;
+  }
+
+  function isFreeReviveAvailable(nowMs) {
+    try {
+      return store().getItem(FREE_REVIVE_KEY) !== todayStr(nowMs);
+    } catch (e) { return false; }
+  }
+
+  function useFreeRevive(nowMs) {
+    try { store().setItem(FREE_REVIVE_KEY, todayStr(nowMs)); } catch (e) { /* ignore */ }
+  }
+
+  /* ---------- daily goal ----------
+   * "Clear N lines today" with a rewarded claim. Progress resets each day. */
+  var DAILY_GOAL_LINES = 25;
+  var DAILY_GOAL_REWARD = 3; // hammers
+  var DAILY_GOAL_KEY = 'bb_daily_goal';
+
+  function getDailyGoal(nowMs) {
+    var today = todayStr(nowMs);
+    var def = { date: today, lines: 0, claimed: false };
+    try {
+      var raw = JSON.parse(store().getItem(DAILY_GOAL_KEY) || 'null');
+      if (raw && raw.date === today) {
+        return {
+          date: today,
+          lines: raw.lines || 0,
+          claimed: !!raw.claimed
+        };
+      }
+    } catch (e) { /* fall through */ }
+    return def;
+  }
+
+  function saveDailyGoal(g) {
+    try { store().setItem(DAILY_GOAL_KEY, JSON.stringify(g)); } catch (e) { /* ignore */ }
+  }
+
+  /* Add cleared lines to today's goal. Returns { completed: justCompletedNow }. */
+  function progressDailyGoal(lines, nowMs) {
+    var g = getDailyGoal(nowMs);
+    var before = g.lines;
+    g.lines += lines;
+    saveDailyGoal(g);
+    var justCompleted = before < DAILY_GOAL_LINES && g.lines >= DAILY_GOAL_LINES;
+    if (justCompleted) logEvent('daily_goal_complete', { lines: g.lines });
+    return { completed: justCompleted, goal: g };
+  }
+
+  function claimDailyGoal(nowMs) {
+    var g = getDailyGoal(nowMs);
+    if (g.lines < DAILY_GOAL_LINES || g.claimed) return false;
+    g.claimed = true;
+    saveDailyGoal(g);
+    addPowerups('hammer', DAILY_GOAL_REWARD);
+    logEvent('daily_goal_claimed', { reward: DAILY_GOAL_REWARD });
+    return true;
+  }
+
+  /* ---------- lifetime lines + theme unlocks ----------
+   * Meta progression: lifetime cleared lines unlock block color themes. */
+  var LIFETIME_LINES_KEY = 'bb_lifetime_lines';
+  var THEME_KEY = 'bb_theme';
+
+  var THEMES = [
+    { id: 'bloom',  name: 'Bloom',  lines: 0 },
+    { id: 'neon',   name: 'Neon',   lines: 100 },
+    { id: 'pastel', name: 'Pastel', lines: 250 },
+    { id: 'gold',   name: 'Gold',   lines: 500 }
+  ];
+
+  function getLifetimeLines() {
+    var n = parseInt(store().getItem(LIFETIME_LINES_KEY) || '0', 10);
+    return isNaN(n) ? 0 : n;
+  }
+
+  /* Add lines; returns newly unlocked theme ids (for the unlock toast). */
+  function addLifetimeLines(n) {
+    var before = getLifetimeLines();
+    var after = before + n;
+    try { store().setItem(LIFETIME_LINES_KEY, String(after)); } catch (e) { /* ignore */ }
+    var unlocked = [];
+    THEMES.forEach(function (t) {
+      if (t.lines > before && t.lines <= after) unlocked.push(t.id);
+    });
+    if (unlocked.length) logEvent('theme_unlocked', { themes: unlocked, lifetimeLines: after });
+    return unlocked;
+  }
+
+  function getUnlockedThemes() {
+    var lines = getLifetimeLines();
+    return THEMES.filter(function (t) { return t.lines <= lines; }).map(function (t) { return t.id; });
+  }
+
+  function getTheme() {
+    var id = null;
+    try { id = store().getItem(THEME_KEY); } catch (e) { /* ignore */ }
+    var unlocked = getUnlockedThemes();
+    if (id && unlocked.indexOf(id) !== -1) return id;
+    return 'bloom';
+  }
+
+  function setTheme(id) {
+    if (getUnlockedThemes().indexOf(id) === -1) return false;
+    try { store().setItem(THEME_KEY, id); } catch (e) { /* ignore */ }
+    logEvent('theme_changed', { theme: id });
+    return true;
+  }
+
+  function themeById(id) {
+    for (var i = 0; i < THEMES.length; i++) if (THEMES[i].id === id) return THEMES[i];
+    return THEMES[0];
+  }
+
   var api = {
     MAX_REVIVES_PER_RUN: MAX_REVIVES_PER_RUN,
     REVIVE_CLEAR_CELLS: REVIVE_CLEAR_CELLS,
@@ -201,6 +325,21 @@
     getLastPlay: getLastPlay,
     stampLastPlay: stampLastPlay,
     maybeWinbackGrant: maybeWinbackGrant,
+    isFreeReviveAvailable: isFreeReviveAvailable,
+    useFreeRevive: useFreeRevive,
+    todayStr: todayStr,
+    DAILY_GOAL_LINES: DAILY_GOAL_LINES,
+    DAILY_GOAL_REWARD: DAILY_GOAL_REWARD,
+    getDailyGoal: getDailyGoal,
+    progressDailyGoal: progressDailyGoal,
+    claimDailyGoal: claimDailyGoal,
+    THEMES: THEMES,
+    getLifetimeLines: getLifetimeLines,
+    addLifetimeLines: addLifetimeLines,
+    getUnlockedThemes: getUnlockedThemes,
+    getTheme: getTheme,
+    setTheme: setTheme,
+    themeById: themeById,
     _store: store // exposed for tests
   };
 

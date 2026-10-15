@@ -9,14 +9,14 @@
   <link rel="manifest" href="manifest.webmanifest">
   <link rel="icon" type="image/svg+xml" href="icon.svg">
   <link rel="apple-touch-icon" href="icon.svg">
-  <link rel="stylesheet" href="style.css?v=4">
+  <link rel="stylesheet" href="style.css?v=5">
 </head>
 <body>
   <div id="app">
     <header class="topbar">
       <div class="brand"><span class="brand-flower">🌸</span> BlockBloom</div>
       <div class="scores">
-        <div class="score-box"><span class="score-label">Score</span><span id="score" class="score-value">0</span></div>
+        <div class="score-box" id="score-box"><span class="score-label">Score</span><span id="score" class="score-value">0</span></div>
         <div class="score-box"><span class="score-label">Best</span><span id="best" class="score-value">0</span></div>
       </div>
       <div class="controls">
@@ -28,10 +28,16 @@
           <button id="btn-undo" class="icon-btn" aria-label="Undo last move">↩️<span id="undo-count" class="count">3</span></button>
           <button id="btn-undo-refill" class="refill" aria-label="Get 3 more undos by watching an ad">+3</button>
         </div>
+        <button id="btn-theme" class="icon-btn" aria-label="Change block theme">🎨</button>
         <button id="btn-mute" class="icon-btn" aria-label="Mute sound">🔊</button>
         <button id="btn-restart" class="icon-btn" aria-label="Restart game">↻</button>
       </div>
     </header>
+
+    <div id="daily-goal-wrap" role="button" aria-label="Daily goal progress" tabindex="0">
+      <div id="daily-goal-fill"></div>
+      <span id="daily-goal-text">Daily: 0/25 lines</span>
+    </div>
 
     <main id="game-area">
       <div id="board-wrap">
@@ -39,6 +45,7 @@
         <div id="preview-layer"></div>
         <div id="fx-layer"></div>
         <div id="combo-popup" aria-live="polite"></div>
+        <div id="fever-banner" hidden>FEVER x2</div>
       </div>
       <div id="tray" aria-label="Piece tray">
         <div class="tray-slot" id="tray-0"></div>
@@ -52,6 +59,25 @@
   </div>
 
   <div id="toast" role="status"></div>
+
+  <div id="theme-overlay" hidden>
+    <div class="sheet-card">
+      <h3>Block Themes</h3>
+      <p class="sheet-sub">Clear lines to unlock new looks.</p>
+      <div id="theme-swatches"></div>
+      <button id="btn-theme-close" class="big-btn reward">Done</button>
+    </div>
+  </div>
+
+  <div id="goal-overlay" hidden>
+    <div class="go-card">
+      <div class="go-flower">🎯</div>
+      <h2>Daily Goal Complete!</h2>
+      <p class="go-sub">25 lines cleared today. Claim your reward.</p>
+      <button id="btn-goal-claim" class="big-btn primary">📺 Watch ad: +3 hammers</button>
+      <button id="btn-goal-later" class="big-btn reward">Later</button>
+    </div>
+  </div>
 
   <div id="gameover-overlay" hidden>
     <div class="go-card">
@@ -72,13 +98,13 @@
   <div id="ad-root"></div>
 
   <script src="pieces.js"></script>
-  <script src="generator.js?v=4"></script>
-  <script src="game.js?v=4"></script>
-  <script src="monetization.js?v=4"></script>
-  <script src="ads.js?v=4"></script>
-  <script src="experiments.js?v=4"></script>
+  <script src="generator.js?v=5"></script>
+  <script src="game.js?v=5"></script>
+  <script src="monetization.js?v=5"></script>
+  <script src="ads.js?v=5"></script>
+  <script src="experiments.js?v=5"></script>
   <script src="audio.js"></script>
-  <script src="ui.js?v=4"></script>
-  <script src="main.js?v=4"></script>
+  <script src="ui.js?v=5"></script>
+  <script src="main.js?v=5"></script>
 </body>
 </html>

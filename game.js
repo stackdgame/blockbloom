@@ -38,6 +38,18 @@
     COMBO_PER_LINE: 50
   };
 
+  /* Fever mode: FEVER_STREAK_NEEDED consecutive moves with 2+ line clears
+   * triggers a FEVER_DURATION_MS window where clear points (not placement)
+   * pay FEVER_MULTIPLIER. Pure excitement mechanic, same for every player. */
+  var FEVER_STREAK_NEEDED = 3;
+  var FEVER_DURATION_MS = 30000;
+  var FEVER_MULTIPLIER = 2;
+
+  function isFeverActive(state, nowMs) {
+    var now = (typeof nowMs === 'number') ? nowMs : Date.now();
+    return state.feverUntil > now;
+  }
+
   function emptyBoard() {
     var b = [];
     for (var r = 0; r < BOARD_SIZE; r++) { b.push([0,0,0,0,0,0,0,0]); }
@@ -75,6 +87,8 @@
       history: [],       // snapshots taken BEFORE each placement (max HISTORY_LIMIT)
       moves: 0,
       movesSinceMultiClear: 0, // moves since the last 2+ line clear (pity timer)
+      feverStreak: 0,          // consecutive moves with 2+ line clears
+      feverUntil: 0,           // timestamp: fever window end (0 = inactive)
       gameOver: false,
       revivesUsed: 0,
       runStart: Date.now(),
@@ -150,7 +164,8 @@
       tray: cloneTray(state.tray),
       score: state.score,
       combo: state.combo,
-      movesSinceMultiClear: state.movesSinceMultiClear
+      movesSinceMultiClear: state.movesSinceMultiClear,
+      feverStreak: state.feverStreak
     });
     while (state.history.length > HISTORY_LIMIT) state.history.shift();
   }
@@ -160,16 +175,26 @@
     var gained = pieceCells * SCORING.PLACE_PER_CELL;
     var lines = clears.lines;
     if (lines > 0) {
-      gained += clears.cells.length * SCORING.CLEAR_PER_CELL * lines;
-      var newCombo = state.combo + 1;
-      gained += SCORING.COMBO_PER_LINE * newCombo * lines;
-      state.combo = newCombo;
+      var mult = isFeverActive(state) ? FEVER_MULTIPLIER : 1;
+      gained += (clears.cells.length * SCORING.CLEAR_PER_CELL * lines +
+        SCORING.COMBO_PER_LINE * (state.combo + 1) * lines) * mult;
+      state.combo += 1;
     } else {
       state.combo = 0;
     }
     // Pity timer: counts moves since the last exciting (2+ line) clear.
-    if (lines >= 2) state.movesSinceMultiClear = 0;
-    else state.movesSinceMultiClear += 1;
+    // Fever streak: consecutive 2+ line clears trigger fever mode.
+    if (lines >= 2) {
+      state.movesSinceMultiClear = 0;
+      state.feverStreak += 1;
+      if (state.feverStreak >= FEVER_STREAK_NEEDED && !isFeverActive(state)) {
+        state.feverUntil = Date.now() + FEVER_DURATION_MS;
+        state.feverStreak = 0;
+      }
+    } else {
+      state.movesSinceMultiClear += 1;
+      state.feverStreak = 0;
+    }
     state.score += gained;
     return gained;
   }
@@ -262,6 +287,9 @@
     if (typeof snap.movesSinceMultiClear === 'number') {
       state.movesSinceMultiClear = snap.movesSinceMultiClear;
     }
+    if (typeof snap.feverStreak === 'number') {
+      state.feverStreak = snap.feverStreak;
+    }
     return true;
   }
 
@@ -284,6 +312,10 @@
     BOARD_SIZE: BOARD_SIZE,
     HISTORY_LIMIT: HISTORY_LIMIT,
     SCORING: SCORING,
+    FEVER_STREAK_NEEDED: FEVER_STREAK_NEEDED,
+    FEVER_DURATION_MS: FEVER_DURATION_MS,
+    FEVER_MULTIPLIER: FEVER_MULTIPLIER,
+    isFeverActive: isFeverActive,
     createGame: createGame,
     emptyBoard: emptyBoard,
     cloneBoard: cloneBoard,
