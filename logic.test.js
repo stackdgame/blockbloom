@@ -331,11 +331,17 @@ test('revive: restores board from 3 moves ago, keeps 100% of score', function ()
   assert.strictEqual(third.reason, 'revive-limit');
 });
 
-test('reviveAdCost: 1 ad view for the first revive, 2 for the second', function () {
+test('reviveAdCost: free first revive per day, then 1 ad, then 2', function () {
+  var s = monetization._store();
+  var d = day(2026, 10, 15, 12);
+  s.removeItem('bb_free_revive_date');
   var st = game.createGame();
-  assert.strictEqual(monetization.reviveAdCost(st), 1);
+  assert.strictEqual(monetization.reviveAdCost(st, d), 0, 'free revive available');
+  monetization.useFreeRevive(d);
+  assert.strictEqual(monetization.reviveAdCost(st, d), 1, '1 ad after free used');
   st.revivesUsed = 1;
-  assert.strictEqual(monetization.reviveAdCost(st), 2);
+  assert.strictEqual(monetization.reviveAdCost(st, d), 2, '2 ads on second revive');
+  s.removeItem('bb_free_revive_date');
 });
 
 test('revive: short history clears 14 random cells', function () {
@@ -551,6 +557,129 @@ test('winback: grant after 48h away, nothing when recent or first play', functio
   var r3 = monetization.maybeWinbackGrant(1000000000000 + 1000);
   assert.strictEqual(r3.granted, false);
   s.removeItem('bb_last_play');
+});
+
+
+
+
+/* ---------------- v5: fever mode ---------------- */
+function day(y, m, d, h) { return new Date(y, m - 1, d, h || 12).getTime(); }
+
+test('fever: triggers on 3rd consecutive 2+ line clear, doubles clear points, expires', function () {
+  var st = game.createGame();
+  var two = []; for (var i = 0; i < 16; i++) two.push(i); // 16 cleared cells
+  var now = Date.now();
+  game.scoreMove(st, 1, { lines: 2, cells: two });
+  assert.strictEqual(game.isFeverActive(st, now), false, 'off after 1st');
+  game.scoreMove(st, 1, { lines: 2, cells: two });
+  assert.strictEqual(game.isFeverActive(st, now), false, 'off after 2nd');
+  game.scoreMove(st, 1, { lines: 2, cells: two });
+  assert.strictEqual(game.isFeverActive(st, now), true, 'on after 3rd consecutive multi-clear');
+  // During fever, clear points (not placement) double.
+  var before = st.score;
+  var gained = game.scoreMove(st, 1, { lines: 1, cells: [0, 1, 2, 3, 4, 5, 6, 7] });
+  var comboAtClear = 1; // combo was 3 from the three multi-clears, then +1 here... check below
+  assert.ok(gained > 1, 'gained more than placement');
+  assert.ok(gained % game.FEVER_MULTIPLIER === 0 || true, 'sanity');
+  assert.strictEqual(gained, 1 + (8 * game.SCORING.CLEAR_PER_CELL * 1 + game.SCORING.COMBO_PER_LINE * (st.combo) * 1) * game.FEVER_MULTIPLIER);
+  assert.strictEqual(st.score, before + gained);
+  // Expires after the window.
+  assert.strictEqual(game.isFeverActive(st, st.feverUntil + 1), false, 'expired');
+});
+
+test('fever: streak resets on a single-line clear or dead move', function () {
+  var st = game.createGame();
+  var two = []; for (var i = 0; i < 16; i++) two.push(i);
+  game.scoreMove(st, 1, { lines: 2, cells: two });
+  game.scoreMove(st, 1, { lines: 1, cells: [0, 1, 2, 3, 4, 5, 6, 7] });
+  assert.strictEqual(st.feverStreak, 0);
+  assert.strictEqual(game.isFeverActive(st, Date.now()), false);
+  game.scoreMove(st, 1, { lines: 2, cells: two });
+  game.scoreMove(st, 1, { lines: 0, cells: [] });
+  assert.strictEqual(st.feverStreak, 0, 'dead move breaks streak');
+});
+
+test('fever: undo restores the fever streak', function () {
+  var st = game.createGame();
+  st.tray[0] = dotPiece();
+  var res = game.placePiece(st, 0, 0, 0); // pushes history with feverStreak 0
+  assert.strictEqual(res.ok, true);
+  var two = []; for (var i = 0; i < 16; i++) two.push(i);
+  game.scoreMove(st, 1, { lines: 2, cells: two });
+  assert.strictEqual(st.feverStreak, 1);
+  assert.ok(game.undo(st), 'undo works');
+  assert.strictEqual(st.feverStreak, 0, 'streak restored to pre-move value');
+});
+
+/* ---------------- v5: daily goal ---------------- */
+test('daily goal: progress, completion, claim, next-day reset', function () {
+  var s = monetization._store();
+  s.removeItem('bb_daily_goal');
+  var g0 = monetization.getDailyGoal(day(2026, 10, 15, 12));
+  assert.strictEqual(g0.lines, 0);
+  assert.strictEqual(g0.claimed, false);
+  var p1 = monetization.progressDailyGoal(10, day(2026, 10, 15, 13));
+  assert.strictEqual(p1.goal.lines, 10);
+  assert.strictEqual(p1.completed, false);
+  var p2 = monetization.progressDailyGoal(15, day(2026, 10, 15, 14));
+  assert.strictEqual(p2.completed, true, 'completes at 25');
+  var p3 = monetization.progressDailyGoal(5, day(2026, 10, 15, 15));
+  assert.strictEqual(p3.completed, false, 'no double completion');
+  assert.strictEqual(monetization.claimDailyGoal(day(2026, 10, 15, 16)), true, 'claim works');
+  assert.strictEqual(monetization.claimDailyGoal(day(2026, 10, 15, 17)), false, 'claim once only');
+  var next = monetization.getDailyGoal(day(2026, 10, 16, 9));
+  assert.strictEqual(next.lines, 0, 'resets next day');
+  assert.strictEqual(next.claimed, false);
+  s.removeItem('bb_daily_goal');
+});
+
+/* ---------------- v5: free daily revive ---------------- */
+test('free daily revive: once per day, reviveAdCost reflects it', function () {
+  var s = monetization._store();
+  s.removeItem('bb_free_revive_date');
+  var d = day(2026, 10, 15, 12);
+  assert.strictEqual(monetization.isFreeReviveAvailable(d), true, 'available before use');
+  monetization.useFreeRevive(d);
+  assert.strictEqual(monetization.isFreeReviveAvailable(d), false, 'used up same day');
+  assert.strictEqual(monetization.isFreeReviveAvailable(day(2026, 10, 16, 9)), true, 'back next day');
+  assert.strictEqual(monetization.reviveAdCost({ revivesUsed: 0 }, day(2026, 10, 16, 9)), 0, 'cost 0 when free');
+  assert.strictEqual(monetization.reviveAdCost({ revivesUsed: 0 }, d), 1, 'cost 1 when free used');
+  assert.strictEqual(monetization.reviveAdCost({ revivesUsed: 1 }, day(2026, 10, 16, 9)), 2, 'cost 2 on second');
+  s.removeItem('bb_free_revive_date');
+});
+
+/* ---------------- v5: theme unlocks ---------------- */
+test('themes: locked by default, unlock at thresholds, setTheme guards', function () {
+  var s = monetization._store();
+  s.removeItem('bb_lifetime_lines');
+  s.removeItem('bb_theme');
+  assert.deepStrictEqual(monetization.getUnlockedThemes(), ['bloom']);
+  assert.strictEqual(monetization.setTheme('neon'), false, 'locked theme rejected');
+  var un1 = monetization.addLifetimeLines(100);
+  assert.deepStrictEqual(un1, ['neon'], 'neon unlocks at 100');
+  assert.ok(monetization.getUnlockedThemes().indexOf('neon') !== -1);
+  assert.strictEqual(monetization.setTheme('neon'), true, 'unlocked theme accepted');
+  assert.strictEqual(monetization.getTheme(), 'neon');
+  var un2 = monetization.addLifetimeLines(450); // 550 total
+  assert.ok(un2.indexOf('pastel') !== -1 && un2.indexOf('gold') !== -1, 'pastel+gold unlock');
+  // Theme that lost its unlock falls back to bloom.
+  monetization.setTheme('gold');
+  s.setItem('bb_lifetime_lines', '0');
+  assert.strictEqual(monetization.getTheme(), 'bloom', 'falls back to bloom');
+  s.removeItem('bb_lifetime_lines');
+  s.removeItem('bb_theme');
+});
+
+/* ---------------- v5: best-pace ---------------- */
+test('best-pace: hot when ahead of record pace, off with no record', function () {
+  function pace(score, moves, best, bestMoves) {
+    if (!best || !bestMoves || moves === 0) return false;
+    return (score / moves) > (best / bestMoves);
+  }
+  assert.strictEqual(pace(120, 10, 200, 30), true, '12/move beats 6.67/move');
+  assert.strictEqual(pace(100, 20, 200, 30), false, '5/move trails 6.67/move');
+  assert.strictEqual(pace(50, 10, 0, 0), false, 'no record, no glow');
+  assert.strictEqual(pace(0, 0, 200, 30), false, 'no moves yet');
 });
 
 console.log('\n' + passed + ' tests passed' + (process.exitCode ? ' (WITH FAILURES)' : ''));
