@@ -1,0 +1,82 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no, viewport-fit=cover">
+  <meta name="theme-color" content="#FAF6EE">
+  <meta name="description" content="BlockBloom by stackdgame. Plant blocks. Bloom combos. A cozy 8x8 block puzzle.">
+  <title>BlockBloom by stackdgame</title>
+  <link rel="manifest" href="manifest.webmanifest">
+  <link rel="icon" type="image/svg+xml" href="icon.svg">
+  <link rel="apple-touch-icon" href="icon.svg">
+  <link rel="stylesheet" href="style.css">
+</head>
+<body>
+  <div id="app">
+    <header class="topbar">
+      <div class="brand"><span class="brand-flower">🌸</span> BlockBloom</div>
+      <div class="scores">
+        <div class="score-box"><span class="score-label">Score</span><span id="score" class="score-value">0</span></div>
+        <div class="score-box"><span class="score-label">Best</span><span id="best" class="score-value">0</span></div>
+      </div>
+      <div class="controls">
+        <div class="powerup">
+          <button id="btn-hammer" class="icon-btn" aria-label="Hammer: smash one filled cell">🔨<span id="hammer-count" class="count">3</span></button>
+          <button id="btn-hammer-refill" class="refill" aria-label="Get 3 more hammers by watching an ad">+3</button>
+        </div>
+        <div class="powerup">
+          <button id="btn-undo" class="icon-btn" aria-label="Undo last move">↩️<span id="undo-count" class="count">3</span></button>
+          <button id="btn-undo-refill" class="refill" aria-label="Get 3 more undos by watching an ad">+3</button>
+        </div>
+        <button id="btn-mute" class="icon-btn" aria-label="Mute sound">🔊</button>
+        <button id="btn-restart" class="icon-btn" aria-label="Restart game">↻</button>
+      </div>
+    </header>
+
+    <main id="game-area">
+      <div id="board-wrap">
+        <div id="board" role="grid" aria-label="BlockBloom board"></div>
+        <div id="preview-layer"></div>
+        <div id="fx-layer"></div>
+        <div id="combo-popup" aria-live="polite"></div>
+      </div>
+      <div id="tray" aria-label="Piece tray">
+        <div class="tray-slot" id="tray-0"></div>
+        <div class="tray-slot" id="tray-1"></div>
+        <div class="tray-slot" id="tray-2"></div>
+      </div>
+      <p class="hint">Drag pieces onto the board. Fill rows or columns to bloom them away.</p>
+    </main>
+
+    <footer class="foot">BlockBloom by stackdgame. Plant blocks. Bloom combos.</footer>
+  </div>
+
+  <div id="toast" role="status"></div>
+
+  <div id="gameover-overlay" hidden>
+    <div class="go-card">
+      <div class="go-flower">🥀</div>
+      <h2>No Space Left</h2>
+      <p class="go-sub">The garden is full. Lovely run.</p>
+      <div class="go-scores">
+        <div><span class="score-label">Score</span><span id="go-score" class="score-value">0</span></div>
+        <div><span class="score-label">Best</span><span id="go-best" class="score-value">0</span></div>
+      </div>
+      <button id="btn-again" class="big-btn primary">🌸 Bloom Again</button>
+      <button id="btn-revive" class="big-btn reward"><span>📺</span><span id="revive-label">Watch ad to keep going (1 left)</span></button>
+      <p class="go-note">Revive restores your board and keeps 100% of your score.</p>
+    </div>
+  </div>
+
+  <div id="ad-root"></div>
+
+  <script src="pieces.js"></script>
+  <script src="generator.js"></script>
+  <script src="game.js"></script>
+  <script src="monetization.js"></script>
+  <script src="ads.js"></script>
+  <script src="audio.js"></script>
+  <script src="ui.js"></script>
+  <script src="main.js"></script>
+</body>
+</html>

@@ -1,0 +1,390 @@
+'use strict';
+/* BlockBloom logic tests. Plain Node asserts, no dependencies.
+ * Run: node test/logic.test.js   (from ~/workspace/blockbloom) */
+var assert = require('node:assert');
+var pieces = require('../pieces.js');
+var game = require('../game.js');
+var generator = require('../generator.js');
+var monetization = require('../monetization.js');
+
+var passed = 0;
+function test(name, fn) {
+  try {
+    fn();
+    passed += 1;
+    console.log('ok - ' + name);
+  } catch (err) {
+    console.error('FAIL - ' + name);
+    console.error(err);
+    process.exitCode = 1;
+  }
+}
+
+/* Deterministic RNG (LCG) so the generator fairness test is reproducible. */
+function lcg(seed) {
+  var s = seed >>> 0;
+  return function () {
+    s = (Math.imul(s, 1664525) + 1013904223) >>> 0;
+    return s / 4294967296;
+  };
+}
+
+function dotPiece() { return generator.makePiece(pieces.SHAPES[0]); }
+
+/* Fill every cell of row r except column skipC. */
+function fillRowExcept(board, r, skipC, color) {
+  for (var c = 0; c < 8; c++) {
+    if (c !== skipC) board[r][c] = color || 1;
+  }
+}
+
+/* ---------------- shape sanity ---------------- */
+test('shapes: at least 28 shapes, normalized, positive weight', function () {
+  assert.ok(pieces.SHAPES.length >= 28, 'expected >=28 shapes, got ' + pieces.SHAPES.length);
+  pieces.SHAPES.forEach(function (sh) {
+    assert.ok(sh.cells.length > 0, sh.name + ' has cells');
+    assert.ok(sh.weight > 0, sh.name + ' has positive weight');
+    var minR = Math.min.apply(null, sh.cells.map(function (c) { return c[0]; }));
+    var minC = Math.min.apply(null, sh.cells.map(function (c) { return c[1]; }));
+    assert.strictEqual(minR, 0, sh.name + ' normalized to row 0');
+    assert.strictEqual(minC, 0, sh.name + ' normalized to col 0');
+    assert.ok(sh.color >= 1 && sh.color <= 6, sh.name + ' color in 1..6');
+  });
+});
+
+/* ---------------- placement validity ---------------- */
+test('canPlace: basic validity', function () {
+  var st = game.createGame();
+  var dot = dotPiece();
+  assert.strictEqual(game.canPlace(st.board, dot, 0, 0), true);
+  assert.strictEqual(game.canPlace(st.board, dot, 7, 7), true);
+  assert.strictEqual(game.canPlace(st.board, dot, 8, 0), false, 'out of bounds row');
+  assert.strictEqual(game.canPlace(st.board, dot, 0, 8), false, 'out of bounds col');
+  assert.strictEqual(game.canPlace(st.board, null, 0, 0), false, 'null piece');
+
+  st.board[3][3] = 2;
+  assert.strictEqual(game.canPlace(st.board, dot, 3, 3), false, 'occupied cell');
+
+  var line5h = generator.makePiece(pieces.SHAPES[7]); // line5-h
+  assert.strictEqual(game.canPlace(st.board, line5h, 0, 0), true);
+  assert.strictEqual(game.canPlace(st.board, line5h, 0, 4), false, 'extends past right edge');
+});
+
+test('placePiece: fills cells, scores placement, empties tray slot', function () {
+  var st = game.createGame();
+  st.tray[0] = dotPiece();
+  var res = game.placePiece(st, 0, 2, 3);
+  assert.strictEqual(res.ok, true);
+  assert.strictEqual(st.board[2][3], 1);
+  assert.strictEqual(st.tray[0], null);
+  assert.strictEqual(res.gained, 1, '1 cell placed = 1 point');
+  assert.strictEqual(st.score, 1);
+  assert.strictEqual(st.history.length, 1, 'history snapshot pushed');
+
+  var bad = game.placePiece(st, 0, 2, 3); // slot empty now
+  assert.strictEqual(bad.ok, false);
+  var bad2 = game.placePiece(st, 1, 2, 3); // null piece
+  assert.strictEqual(bad2.ok, false);
+});
+
+/* ---------------- simultaneous row + column clear ---------------- */
+test('findClears + placePiece: simultaneous row and column clear', function () {
+  var st = game.createGame();
+  // Row 0 filled except col 7; col 7 filled except row 0.
+  fillRowExcept(st.board, 0, 7, 1);
+  for (var r = 1; r < 8; r++) st.board[r][7] = 2;
+  st.tray[0] = dotPiece();
+
+  var res = game.placePiece(st, 0, 0, 7);
+  assert.strictEqual(res.ok, true);
+  assert.deepStrictEqual(res.clears.rows, [0]);
+  assert.deepStrictEqual(res.clears.cols, [7]);
+  assert.strictEqual(res.lines, 2);
+  // 8 row cells + 8 col cells - 1 shared corner = 15 unique cells.
+  assert.strictEqual(res.clears.cells.length, 15);
+
+  // Scoring: place 1 + 15*10*2 + 50*1*2 = 1 + 300 + 100 = 401. Combo becomes 1.
+  assert.strictEqual(res.gained, 401);
+  assert.strictEqual(st.score, 401);
+  assert.strictEqual(st.combo, 1);
+
+  var cleared = game.applyClear(st, res.clears);
+  assert.strictEqual(cleared.length, 15);
+  for (var rr = 0; rr < 8; rr++) {
+    assert.strictEqual(st.board[0][rr], 0, 'row 0 cleared');
+    assert.strictEqual(st.board[rr][7], 0, 'col 7 cleared');
+  }
+});
+
+test('scoring: single line clear math', function () {
+  var st = game.createGame();
+  fillRowExcept(st.board, 2, 5, 3);
+  st.tray[0] = dotPiece();
+  var res = game.placePiece(st, 0, 2, 5);
+  assert.strictEqual(res.lines, 1);
+  // 1 + 8*10*1 + 50*1*1 = 131
+  assert.strictEqual(res.gained, 131);
+  game.applyClear(st, res.clears);
+});
+
+/* ---------------- combo counting ---------------- */
+test('combo: consecutive clearing moves increment, miss resets', function () {
+  var st = game.createGame();
+
+  // Move 1: clear row 0.
+  fillRowExcept(st.board, 0, 0, 1);
+  st.tray[0] = dotPiece();
+  var r1 = game.placePiece(st, 0, 0, 0);
+  assert.strictEqual(r1.lines, 1);
+  assert.strictEqual(st.combo, 1);
+  // gained = 1 + 8*10*1 + 50*1*1 = 131
+  assert.strictEqual(r1.gained, 131);
+  game.applyClear(st, r1.clears);
+
+  // Move 2: clear row 1 right away -> combo 2.
+  fillRowExcept(st.board, 1, 1, 2);
+  st.tray[0] = dotPiece();
+  var r2 = game.placePiece(st, 0, 1, 1);
+  assert.strictEqual(st.combo, 2);
+  // gained = 1 + 8*10*1 + 50*2*1 = 181
+  assert.strictEqual(r2.gained, 181);
+  game.applyClear(st, r2.clears);
+
+  // Move 3: no clear -> combo resets to 0, only placement points.
+  st.tray[0] = dotPiece();
+  var r3 = game.placePiece(st, 0, 4, 4);
+  assert.strictEqual(r3.lines, 0);
+  assert.strictEqual(r3.gained, 1);
+  assert.strictEqual(st.combo, 0);
+  assert.strictEqual(st.score, 131 + 181 + 1);
+});
+
+test('combo bonus scales with line count (multi-line clear)', function () {
+  var st = game.createGame();
+  // Rows 0 and 1 filled except cols 6..7; a 2x2 square at (0,6) completes both.
+  for (var c = 0; c < 6; c++) { st.board[0][c] = 1; st.board[1][c] = 2; }
+  var sq = generator.makePiece(pieces.SHAPES[9]); // square2
+  st.tray[0] = sq;
+  var res = game.placePiece(st, 0, 0, 6);
+  assert.strictEqual(res.ok, true);
+  assert.strictEqual(res.lines, 2);
+  assert.strictEqual(res.clears.cells.length, 16);
+  // 4 + 16*10*2 + 50*1*2 = 4 + 320 + 100 = 424
+  assert.strictEqual(res.gained, 424);
+  game.applyClear(st, res.clears);
+});
+
+/* ---------------- game over detection ---------------- */
+test('checkGameOver: honest detection only', function () {
+  var st = game.createGame();
+  // Board with isolated single empty cells: nothing bigger than a dot fits.
+  for (var r = 0; r < 8; r++) {
+    for (var c = 0; c < 8; c++) st.board[r][c] = 1;
+  }
+  st.board[0][0] = 0; st.board[2][2] = 0; st.board[5][5] = 0;
+
+  st.tray = [generator.makePiece(pieces.SHAPES[1]), null, null]; // domino-h
+  assert.strictEqual(game.checkGameOver(st), true, 'domino fits nowhere');
+
+  st.tray = [dotPiece(), null, null];
+  assert.strictEqual(game.checkGameOver(st), false, 'dot still fits');
+
+  // Empty board with pieces: never game over.
+  var st2 = game.createGame();
+  st2.tray = [generator.makePiece(pieces.SHAPES[10]), null, null]; // square3
+  assert.strictEqual(game.checkGameOver(st2), false);
+
+  // Empty tray: not game over (caller must deal first).
+  var st3 = game.createGame();
+  assert.strictEqual(game.checkGameOver(st3), false);
+});
+
+test('anyFit: finds fits on a partially filled board', function () {
+  var st = game.createGame();
+  st.board[0][0] = 1; st.board[0][1] = 1; st.board[1][0] = 1;
+  assert.strictEqual(game.anyFit(st.board, [dotPiece()]), true);
+  // A 3x3 square cannot fit in a 2x2 corner pocket.
+  var st2 = game.createGame();
+  for (var r = 0; r < 8; r++) for (var c = 0; c < 8; c++) st2.board[r][c] = 1;
+  st2.board[0][0] = 0; st2.board[0][1] = 0; st2.board[1][0] = 0; st2.board[1][1] = 0;
+  assert.strictEqual(game.anyFit(st2.board, [generator.makePiece(pieces.SHAPES[10])]), false);
+  assert.strictEqual(game.anyFit(st2.board, [generator.makePiece(pieces.SHAPES[9])]), true);
+});
+
+/* ---------------- generator fairness ---------------- */
+test('generator: 1000 deals, at least one piece always fits (fair, never rigged)', function () {
+  var rng = lcg(12345);
+  for (var i = 0; i < 1000; i++) {
+    var board = game.emptyBoard();
+    var p = 0.1 + rng() * 0.75; // fill between 10% and 85%
+    var emptySeen = false;
+    for (var r = 0; r < 8; r++) {
+      for (var c = 0; c < 8; c++) {
+        if (rng() < p) board[r][c] = 1 + Math.floor(rng() * 6);
+        else emptySeen = true;
+      }
+    }
+    if (!emptySeen) board[0][0] = 0;
+    var tray = generator.drawTray(board, rng);
+    assert.strictEqual(tray.length, 3);
+    assert.ok(game.anyFit(board, tray), 'deal ' + i + ' has no fitting piece');
+  }
+});
+
+test('generator: assist boosts small-piece weight only above 55% fill', function () {
+  var small = pieces.SHAPES[0]; // dot, small
+  var big = pieces.SHAPES[10];  // square3, not small
+  assert.strictEqual(generator.isSmall(small), true);
+  assert.strictEqual(generator.isSmall(big), false);
+  assert.strictEqual(generator.effectiveWeight(small, 0.4), small.weight);
+  assert.strictEqual(
+    generator.effectiveWeight(small, 0.6),
+    small.weight * generator.ASSIST_BOOST
+  );
+  assert.strictEqual(generator.effectiveWeight(big, 0.9), big.weight, 'big pieces never boosted');
+});
+
+test('generator: fully full board still deals (honest game over follows)', function () {
+  var board = game.emptyBoard();
+  for (var r = 0; r < 8; r++) for (var c = 0; c < 8; c++) board[r][c] = 1;
+  var tray = generator.drawTray(board, lcg(7));
+  assert.strictEqual(tray.length, 3);
+  // Nothing can fit on a full board; checkGameOver must report honestly.
+  var st = game.createGame();
+  st.board = board;
+  st.tray = tray;
+  assert.strictEqual(game.checkGameOver(st), true);
+});
+
+/* ---------------- undo ---------------- */
+test('undo: restores board, tray, score and combo', function () {
+  var st = game.createGame();
+  st.tray[0] = dotPiece();
+  var before = game.cloneBoard(st.board);
+  var res = game.placePiece(st, 0, 0, 0);
+  assert.strictEqual(res.ok, true);
+  assert.strictEqual(st.score, 1);
+  assert.strictEqual(st.tray[0], null);
+
+  assert.strictEqual(game.undo(st), true);
+  assert.deepStrictEqual(st.board, before);
+  assert.strictEqual(st.score, 0);
+  assert.strictEqual(st.combo, 0);
+  assert.ok(st.tray[0] !== null, 'tray piece refunded');
+  assert.strictEqual(st.history.length, 0);
+
+  assert.strictEqual(game.undo(st), false, 'nothing left to undo');
+});
+
+test('undo: restores score after a clearing move', function () {
+  var st = game.createGame();
+  fillRowExcept(st.board, 3, 3, 2);
+  st.tray[1] = dotPiece();
+  var res = game.placePiece(st, 1, 3, 3);
+  assert.strictEqual(res.gained, 131);
+  assert.strictEqual(game.undo(st), true);
+  assert.strictEqual(st.score, 0);
+  assert.strictEqual(st.board[3][3], 0, 'placed cell reverted');
+  assert.strictEqual(st.board[3][0], 2, 'pre-existing cells kept');
+});
+
+/* ---------------- revive ---------------- */
+test('revive: restores board from 3 moves ago, keeps 100% of score', function () {
+  var st = game.createGame();
+  // Make 4 placements so history has 4 snapshots.
+  var spots = [[0,0],[0,1],[0,2],[0,3]];
+  spots.forEach(function (s) {
+    st.tray[0] = dotPiece();
+    var res = game.placePiece(st, 0, s[0], s[1]);
+    assert.strictEqual(res.ok, true);
+  });
+  assert.strictEqual(st.history.length, 4);
+  assert.strictEqual(st.score, 4);
+  // Simulate the death: fill the rest of the board.
+  for (var r = 0; r < 8; r++) for (var c = 0; c < 8; c++) st.board[r][c] = 3;
+  st.gameOver = true;
+
+  var rng = lcg(99);
+  var res = monetization.reviveGame(st, rng);
+  assert.strictEqual(res.ok, true);
+  assert.strictEqual(res.method, 'snapshot');
+  // Board restored to the snapshot from 3 moves ago = state after 1 placement.
+  assert.strictEqual(st.board[0][0] !== 0, true, 'first placed cell present');
+  assert.strictEqual(st.board[0][1], 0, 'later placements rolled back');
+  assert.strictEqual(st.score, 4, 'score kept at 100%');
+  assert.strictEqual(st.combo, 0, 'combo resets');
+  assert.strictEqual(st.gameOver, false);
+  assert.strictEqual(st.revivesUsed, 1);
+  assert.strictEqual(st.tray.length, 3);
+  assert.ok(st.tray.every(function (p) { return p !== null; }), 'fresh tray dealt');
+  assert.ok(game.anyFit(st.board, st.tray), 'fresh tray is playable');
+
+  var again = monetization.reviveGame(st, rng);
+  assert.strictEqual(again.ok, false, 'max 1 revive per run');
+  assert.strictEqual(again.reason, 'revive-limit');
+});
+
+test('revive: short history clears 14 random cells', function () {
+  var st = game.createGame();
+  st.tray[0] = dotPiece();
+  game.placePiece(st, 0, 0, 0);
+  // Only 1 snapshot in history (< 3). Fill 20 more cells: 21 filled total.
+  var extra = 0;
+  for (var r = 0; r < 8 && extra < 20; r++) {
+    for (var c = 0; c < 8 && extra < 20; c++) {
+      if (st.board[r][c] === 0) { st.board[r][c] = 2; extra++; }
+    }
+  }
+  var filledBefore = 0;
+  st.board.forEach(function (row) { row.forEach(function (v) { if (v !== 0) filledBefore++; }); });
+  assert.strictEqual(filledBefore, 21);
+
+  var res = monetization.reviveGame(st, lcg(5));
+  assert.strictEqual(res.ok, true);
+  assert.strictEqual(res.method, 'clear-cells');
+  var filledAfter = 0;
+  st.board.forEach(function (row) { row.forEach(function (v) { if (v !== 0) filledAfter++; }); });
+  assert.strictEqual(filledAfter, 21 - monetization.REVIVE_CLEAR_CELLS);
+  assert.strictEqual(st.score, 1, 'score kept');
+});
+
+/* ---------------- hammer / misc ---------------- */
+test('hammerCell: clears exactly one filled cell', function () {
+  var st = game.createGame();
+  st.board[4][4] = 5;
+  assert.strictEqual(game.hammerCell(st, 4, 4), true);
+  assert.strictEqual(st.board[4][4], 0);
+  assert.strictEqual(game.hammerCell(st, 4, 4), false, 'already empty');
+  assert.strictEqual(game.hammerCell(st, 8, 0), false, 'out of bounds');
+});
+
+test('dealTray: fills all three slots', function () {
+  var st = game.createGame();
+  game.dealTray(st, lcg(11));
+  assert.strictEqual(st.tray.length, 3);
+  assert.ok(st.tray.every(function (p) { return p !== null; }));
+});
+
+test('analytics stub: logs events to ring buffer', function () {
+  monetization._store().removeItem('bb_analytics');
+  monetization.logEvent('game_over', { score: 100 });
+  monetization.logEvent('revive_used', { method: 'snapshot' });
+  var evts = monetization.getAnalyticsEvents();
+  assert.ok(evts.length >= 2);
+  assert.strictEqual(evts[evts.length - 1].name, 'revive_used');
+  assert.strictEqual(evts[evts.length - 1].data.method, 'snapshot');
+});
+
+test('powerups: start at 3, use decrements, refill adds 3', function () {
+  var s = monetization._store();
+  s.removeItem('bb_powerup_hammer');
+  assert.strictEqual(monetization.getPowerups('hammer'), 3);
+  assert.strictEqual(monetization.usePowerup('hammer'), true);
+  assert.strictEqual(monetization.getPowerups('hammer'), 2);
+  monetization.addPowerups('hammer', 3);
+  assert.strictEqual(monetization.getPowerups('hammer'), 5);
+  monetization.setPowerups('hammer', 0);
+  assert.strictEqual(monetization.usePowerup('hammer'), false);
+});
+
+console.log('\n' + passed + ' tests passed' + (process.exitCode ? ' (WITH FAILURES)' : ''));

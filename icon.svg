@@ -1,0 +1,18 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 512 512">
+  <rect width="512" height="512" rx="112" fill="#FAF6EE"/>
+  <!-- bloom: five rounded petals around a golden center -->
+  <g>
+    <ellipse cx="256" cy="150" rx="62" ry="92" fill="#F2789F"/>
+    <ellipse cx="358" cy="225" rx="62" ry="92" fill="#F2A93B" transform="rotate(72 358 225)"/>
+    <ellipse cx="318" cy="348" rx="62" ry="92" fill="#46BD87" transform="rotate(144 318 348)"/>
+    <ellipse cx="194" cy="348" rx="62" ry="92" fill="#5CA8E8" transform="rotate(216 194 348)"/>
+    <ellipse cx="154" cy="225" rx="62" ry="92" fill="#A37FE0" transform="rotate(288 154 225)"/>
+    <circle cx="256" cy="256" r="58" fill="#F7D154"/>
+    <circle cx="256" cy="256" r="58" fill="none" stroke="#E0A92E" stroke-width="10"/>
+    <!-- blocky center: a tiny 2x2 square motif -->
+    <rect x="232" y="232" width="22" height="22" rx="6" fill="#FAF6EE"/>
+    <rect x="258" y="232" width="22" height="22" rx="6" fill="#FAF6EE"/>
+    <rect x="232" y="258" width="22" height="22" rx="6" fill="#FAF6EE"/>
+    <rect x="258" y="258" width="22" height="22" rx="6" fill="#FAF6EE"/>
+  </g>
+</svg>
