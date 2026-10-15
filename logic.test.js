@@ -48,7 +48,7 @@ test('shapes: at least 28 shapes, normalized, positive weight', function () {
     var minC = Math.min.apply(null, sh.cells.map(function (c) { return c[1]; }));
     assert.strictEqual(minR, 0, sh.name + ' normalized to row 0');
     assert.strictEqual(minC, 0, sh.name + ' normalized to col 0');
-    assert.ok(sh.color >= 1 && sh.color <= 6, sh.name + ' color in 1..6');
+    assert.ok(sh.color >= 1 && sh.color <= 8, sh.name + ' color in 1..8');
   });
 });
 

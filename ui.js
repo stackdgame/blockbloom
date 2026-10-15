@@ -1,17 +1,27 @@
 'use strict';
 /* BlockBloom UI: rendering, drag and drop (Pointer Events, mouse + touch),
  * animations, panels. Talks to pure logic in game.js; never reimplements it.
- * Browser only. */
+ * Browser only.
+ *
+ * PIXEL-EXACT BOARD: layoutBoard() computes CELL (integer px) from the
+ * available width and sizes #board-wrap to exactly CELL*8. The grid uses
+ * repeat(8, var(--cell)) with NO padding, so drag math (CELL px per cell)
+ * always matches rendered cells. Preview/fx layers are inset:0 inside the
+ * exactly-sized wrap, so overlays align perfectly too.
+ */
 (function () {
   var COLORS = {
-    1: '#F2789F', // rose
-    2: '#F2A93B', // marigold
-    3: '#46BD87', // clover
-    4: '#5CA8E8', // sky
-    5: '#A37FE0', // violet
-    6: '#E86A7A'  // berry
+    1: '#ff5c7a',
+    2: '#ff9f43',
+    3: '#2ed573',
+    4: '#3aa0ff',
+    5: '#a55eea',
+    6: '#ffd32a',
+    7: '#1dd1a1',
+    8: '#fd79a8'
   };
   var TRAY_CELL = 20; // px per cell for tray pieces (exact, for drag math)
+  var CELL = 0;       // exact px per board cell; set by layoutBoard()
 
   var api = {};
   var ctx = null; // { getState(), sound, onPlace, onBoardTap, isBusy }
@@ -21,6 +31,23 @@
   function $(id) { return document.getElementById(id); }
 
   function state() { return ctx.getState(); }
+
+  /* ---------------- exact board layout ---------------- */
+  function layoutBoard() {
+    var avail = Math.min($('game-area').clientWidth || 360, 420);
+    var cell = Math.max(24, Math.floor(avail / 8));
+    CELL = cell;
+    var px = cell * 8;
+    els.boardWrap.style.width = px + 'px';
+    els.boardWrap.style.height = px + 'px';
+    els.board.style.setProperty('--cell', cell + 'px');
+  }
+
+  var resizeTimer = 0;
+  function onResize() {
+    clearTimeout(resizeTimer);
+    resizeTimer = setTimeout(layoutBoard, 150);
+  }
 
   function init(c) {
     ctx = c;
@@ -39,6 +66,9 @@
     els.goScore = $('go-score');
     els.goBest = $('go-best');
     els.reviveLabel = $('revive-label');
+    layoutBoard();
+    window.addEventListener('resize', onResize);
+    window.addEventListener('orientationchange', onResize);
     renderAll();
   }
 
@@ -64,7 +94,7 @@
     els.board.classList.toggle('armed', !!ctx.isHammerArmed && ctx.isHammerArmed());
   }
 
-  function pieceGrid(piece, cellPx) {
+  function pieceGrid(piece, cellPx, ghostMode) {
     var g = document.createElement('div');
     g.className = 'piece-grid';
     g.style.gridTemplateColumns = 'repeat(' + piece.w + ', ' + cellPx + 'px)';
@@ -74,8 +104,15 @@
     for (var r = 0; r < piece.h; r++) {
       for (var c = 0; c < piece.w; c++) {
         var d = document.createElement('div');
-        if (filled[r + ',' + c]) d.className = 'pcell c' + piece.color;
-        else d.className = 'pcell empty';
+        if (filled[r + ',' + c]) {
+          d.className = 'pcell blk c' + piece.color;
+          if (ghostMode) {
+            d.style.width = cellPx + 'px';
+            d.style.height = cellPx + 'px';
+          }
+        } else {
+          d.className = 'pcell empty';
+        }
         g.appendChild(d);
       }
     }
@@ -91,8 +128,8 @@
         if (!piece) return;
         var wrap = document.createElement('div');
         wrap.className = 'tray-piece';
-        wrap.appendChild(pieceGrid(piece, TRAY_CELL));
-        wrap.addEventListener('pointerdown', function (e) { startDrag(e, slot, piece); });
+        wrap.appendChild(pieceGrid(piece, TRAY_CELL, false));
+        wrap.addEventListener('pointerdown', function (e) { startDrag(e, slot, wrap, piece); });
         slot.appendChild(wrap);
       })(els.tray[i], st.tray[i]);
     }
@@ -129,6 +166,7 @@
   }
 
   function renderAll() {
+    layoutBoard();
     renderBoard();
     renderTray();
     updateScore(false);
@@ -136,29 +174,34 @@
   }
 
   /* ---------------- drag and drop ---------------- */
-  function boardMetrics() {
-    var rect = els.board.getBoundingClientRect();
-    return { rect: rect, cell: rect.width / 8 };
+  function sweepStrayGhosts() {
+    var strays = document.querySelectorAll('.drag-ghost');
+    for (var i = 0; i < strays.length; i++) {
+      if (strays[i].parentNode) strays[i].parentNode.removeChild(strays[i]);
+    }
   }
 
-  function startDrag(e, slotEl, piece) {
+  function startDrag(e, slotEl, wrapEl, piece) {
+    sweepStrayGhosts(); // never leave a stuck ghost behind
     if (drag || ctx.isBusy() || state().gameOver) return;
     var st = state();
     var trayIdx = els.tray.indexOf(slotEl);
     if (trayIdx < 0 || st.tray[trayIdx] !== piece) return; // stale
     e.preventDefault();
 
-    var gridEl = slotEl.querySelector('.piece-grid');
+    // Pointer capture guarantees pointerup/pointercancel delivery on iOS.
+    try { wrapEl.setPointerCapture(e.pointerId); } catch (err) {}
+
+    var gridEl = wrapEl.querySelector('.piece-grid');
     var gridRect = gridEl.getBoundingClientRect();
-    var bm = boardMetrics();
-    var bs = bm.cell;
+    var bs = CELL; // exact board cell px
     var scale = bs / TRAY_CELL;
     var grabX = (e.clientX - gridRect.left) * scale;
     var grabY = (e.clientY - gridRect.top) * scale;
 
     var ghost = document.createElement('div');
     ghost.className = 'drag-ghost';
-    ghost.appendChild(pieceGrid(piece, bs));
+    ghost.appendChild(pieceGrid(piece, bs, true));
     ghost.style.left = (e.clientX - grabX) + 'px';
     ghost.style.top = (e.clientY - grabY) + 'px';
     document.body.appendChild(ghost);
@@ -185,28 +228,29 @@
     drag.ghost.style.left = (e.clientX - drag.grabX) + 'px';
     drag.ghost.style.top = (e.clientY - drag.grabY) + 'px';
 
-    var bm = boardMetrics();
-    var bs = bm.cell;
-    var r0 = Math.round((e.clientY - drag.grabY - bm.rect.top) / bs);
-    var c0 = Math.round((e.clientX - drag.grabX - bm.rect.left) / bs);
+    var brect = els.board.getBoundingClientRect();
+    var bs = CELL;
+    var r0 = Math.round((e.clientY - drag.grabY - brect.top) / bs);
+    var c0 = Math.round((e.clientX - drag.grabX - brect.left) / bs);
     var legal = ctx.game.canPlace(state().board, drag.piece, r0, c0);
 
     drag.target = { r: r0, c: c0, legal: legal };
-    renderPreview(drag.piece, r0, c0, legal, bs);
+    renderPreview(drag.piece, r0, c0, legal);
   }
 
-  function renderPreview(piece, r0, c0, legal, bs) {
+  function renderPreview(piece, r0, c0, legal) {
     els.preview.innerHTML = '';
+    var bs = CELL;
     for (var i = 0; i < piece.cells.length; i++) {
       var r = r0 + piece.cells[i][0];
       var c = c0 + piece.cells[i][1];
       if (r < 0 || r > 7 || c < 0 || c > 7) continue;
       var d = document.createElement('div');
-      d.className = 'preview-cell c' + piece.color + (legal ? ' ok' : ' no');
-      d.style.left = (c * bs + 2) + 'px';
-      d.style.top = (r * bs + 2) + 'px';
-      d.style.width = (bs - 4) + 'px';
-      d.style.height = (bs - 4) + 'px';
+      d.className = 'preview-cell blk c' + piece.color + (legal ? ' ok' : ' no');
+      d.style.left = (c * bs) + 'px';
+      d.style.top = (r * bs) + 'px';
+      d.style.width = bs + 'px';
+      d.style.height = bs + 'px';
       els.preview.appendChild(d);
     }
   }
@@ -218,12 +262,17 @@
     els.preview.innerHTML = '';
   }
 
-  function onDragEnd(e) {
-    if (!drag) return;
+  function endDragCommon() {
     window.removeEventListener('pointermove', onDragMove);
     var d = drag;
     drag = null;
     clearDragVisuals();
+    return d;
+  }
+
+  function onDragEnd() {
+    var d = endDragCommon();
+    if (!d) return;
     if (d.target && d.target.legal && !ctx.isBusy() && !state().gameOver) {
       ctx.onPlace(d.trayIdx, d.target.r, d.target.c);
     } else {
@@ -232,10 +281,8 @@
   }
 
   function onDragCancel() {
-    if (!drag) return;
-    window.removeEventListener('pointermove', onDragMove);
-    drag = null;
-    clearDragVisuals();
+    var d = endDragCommon();
+    if (!d) return;
     renderTray();
   }
 
@@ -252,8 +299,7 @@
   }
 
   function petalBurst(clearedPreview) {
-    var bm = boardMetrics();
-    var bs = bm.cell;
+    var bs = CELL;
     var max = 42;
     var per = Math.max(1, Math.floor(max / Math.max(1, clearedPreview.length)));
     clearedPreview.forEach(function (cell) {
@@ -264,7 +310,7 @@
       for (var i = 0; i < per; i++) {
         var p = document.createElement('div');
         p.className = 'petal';
-        p.style.background = COLORS[cell.color] || '#F2789F';
+        p.style.background = COLORS[cell.color] || '#ff5c7a';
         p.style.left = x + 'px';
         p.style.top = y + 'px';
         var ang = Math.random() * Math.PI * 2;
@@ -343,6 +389,7 @@
   api.hideGameOver = hideGameOver;
   api.setHammerArmed = setHammerArmed;
   api.COLORS = COLORS;
+  api.layoutBoard = layoutBoard;
 
   var root = typeof globalThis !== 'undefined' ? globalThis : this;
   root.BlockBloom = root.BlockBloom || {};
