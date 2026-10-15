@@ -136,6 +136,7 @@ html, body {
   border-radius: 16px;
   box-shadow: var(--shadow), inset 0 2px 8px rgba(0, 0, 0, 0.35);
   touch-action: none;
+  overflow: hidden;
 }
 #board-wrap.hammer-armed #board { outline: 3px dashed var(--gold); outline-offset: 3px; cursor: crosshair; }
 
@@ -156,24 +157,25 @@ html, body {
 .c7 { --b1: #7ef0d4; --b2: #1dd1a1; --b3: #0fa37e; }
 .c8 { --b1: #ffa4c8; --b2: #fd79a8; --b3: #d1547f; }
 
-.cell.filled,
-.pcell.blk,
-.preview-cell.blk {
+/* Block Blast style: filled cells sit FLUSH (no gaps). The bevel
+ * (light top-left, dark bottom-right) draws the "crack" seams between
+ * touching cells, so every tile stays identifiable with zero spacing. */
+.cell.filled {
+  border: none;
+  border-radius: 6px;
   background: linear-gradient(180deg, var(--b1) 0%, var(--b2) 55%, var(--b3) 100%);
   box-shadow:
-    inset 0 2px 2px rgba(255, 255, 255, 0.5),
-    inset 0 -3px 5px rgba(0, 0, 0, 0.22),
-    0 2px 5px rgba(0, 0, 0, 0.3);
+    inset 2px 2px 0 rgba(255, 255, 255, 0.38),
+    inset -2px -2px 0 rgba(0, 0, 0, 0.3);
 }
-.cell.filled { border-radius: 9px; }
 
-.cell.pop { animation: pop 0.24s ease; }
+.cell.pop { animation: pop 0.14s ease; }
 @keyframes pop {
   0% { transform: scale(0.6); }
   60% { transform: scale(1.12); }
   100% { transform: scale(1); }
 }
-.cell.blooming { animation: bloom 0.34s ease forwards; }
+.cell.blooming { animation: bloom 0.22s ease forwards; }
 @keyframes bloom {
   0% { transform: scale(1); opacity: 1; }
   45% { transform: scale(1.28); opacity: 1; }
@@ -205,7 +207,7 @@ html, body {
   width: 9px;
   height: 9px;
   border-radius: 60% 40% 60% 40%;
-  animation: petalFly 0.7s ease-out forwards;
+  animation: petalFly 0.5s ease-out forwards;
 }
 @keyframes petalFly {
   0% { transform: translate(0, 0) rotate(0deg) scale(1); opacity: 1; }
@@ -221,7 +223,7 @@ html, body {
   font-weight: 900;
   color: #fff;
   text-shadow: 0 2px 8px rgba(0, 0, 0, 0.6);
-  animation: floatUp 1s ease-out forwards;
+  animation: floatUp 0.7s ease-out forwards;
   pointer-events: none;
 }
 @keyframes floatUp {
@@ -243,7 +245,7 @@ html, body {
   pointer-events: none;
   white-space: nowrap;
 }
-#combo-popup.show { animation: comboPop 1.1s ease forwards; }
+#combo-popup.show { animation: comboPop 0.8s ease forwards; }
 @keyframes comboPop {
   0% { opacity: 0; transform: translateX(-50%) scale(0.6); }
   25% { opacity: 1; transform: translateX(-50%) scale(1.15); }
@@ -274,9 +276,14 @@ html, body {
 .tray-slot.empty { opacity: 0.35; }
 .tray-piece { cursor: grab; touch-action: none; }
 .tray-piece:active { cursor: grabbing; }
-.piece-grid { display: grid; gap: 2px; }
-.pcell { border-radius: 5px; }
-.pcell.blk { border-radius: 5px; }
+.piece-grid { display: grid; gap: 0; }
+.pcell { border-radius: 4px; }
+.pcell.blk {
+  background: linear-gradient(180deg, var(--b1) 0%, var(--b2) 55%, var(--b3) 100%);
+  box-shadow:
+    inset 2px 2px 0 rgba(255, 255, 255, 0.38),
+    inset -2px -2px 0 rgba(0, 0, 0, 0.3);
+}
 .pcell.empty { background: transparent; box-shadow: none; }
 .piece-grid.drag-src { opacity: 0.25; }
 
@@ -287,12 +294,6 @@ html, body {
   opacity: 0.95;
   filter: drop-shadow(0 10px 14px rgba(0, 0, 0, 0.45));
   margin: 0;
-}
-.drag-ghost .piece-grid { gap: 0; }
-.drag-ghost .pcell {
-  border: 2px solid transparent;
-  border-radius: 9px;
-  background-clip: padding-box;
 }
 
 .hint {

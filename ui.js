@@ -148,7 +148,7 @@
     cancelAnimationFrame(scoreRaf);
     var from = shownScore;
     var t0 = performance.now();
-    var dur = 450;
+    var dur = 250;
     function step(t) {
       var k = Math.min(1, (t - t0) / dur);
       var v = Math.round(from + (target - from) * (1 - Math.pow(1 - k, 3)));
@@ -179,11 +179,17 @@
     for (var i = 0; i < strays.length; i++) {
       if (strays[i].parentNode) strays[i].parentNode.removeChild(strays[i]);
     }
+    els.preview.innerHTML = '';
+    lastPreviewKey = '';
   }
 
   function startDrag(e, slotEl, wrapEl, piece) {
+    if (drag) {
+      if (e.pointerId === drag.pointerId) endDragCommon(); // re-entrant: reset
+      else return; // second finger: leave the active drag alone
+    }
     sweepStrayGhosts(); // never leave a stuck ghost behind
-    if (drag || ctx.isBusy() || state().gameOver) return;
+    if (ctx.isBusy() || state().gameOver) return;
     var st = state();
     var trayIdx = els.tray.indexOf(slotEl);
     if (trayIdx < 0 || st.tray[trayIdx] !== piece) return; // stale
@@ -208,34 +214,44 @@
     gridEl.classList.add('drag-src');
 
     drag = {
+      pointerId: e.pointerId,
       trayIdx: trayIdx,
       piece: piece,
       ghost: ghost,
       srcGrid: gridEl,
       grabX: grabX,
       grabY: grabY,
+      brect: els.board.getBoundingClientRect(), // cached: board never moves mid-drag
       target: null
     };
+    lastPreviewKey = '';
 
     window.addEventListener('pointermove', onDragMove, { passive: false });
-    window.addEventListener('pointerup', onDragEnd, { once: true });
-    window.addEventListener('pointercancel', onDragCancel, { once: true });
+    window.addEventListener('pointerup', onDragEnd);
+    window.addEventListener('pointercancel', onDragCancel);
   }
 
+  var lastPreviewKey = '';
+
   function onDragMove(e) {
-    if (!drag) return;
+    if (!drag || e.pointerId !== drag.pointerId) return;
     e.preventDefault();
     drag.ghost.style.left = (e.clientX - drag.grabX) + 'px';
     drag.ghost.style.top = (e.clientY - drag.grabY) + 'px';
 
-    var brect = els.board.getBoundingClientRect();
     var bs = CELL;
-    var r0 = Math.round((e.clientY - drag.grabY - brect.top) / bs);
-    var c0 = Math.round((e.clientX - drag.grabX - brect.left) / bs);
+    var r0 = Math.round((e.clientY - drag.grabY - drag.brect.top) / bs);
+    var c0 = Math.round((e.clientX - drag.grabX - drag.brect.left) / bs);
     var legal = ctx.game.canPlace(state().board, drag.piece, r0, c0);
 
     drag.target = { r: r0, c: c0, legal: legal };
-    renderPreview(drag.piece, r0, c0, legal);
+    // Perf: rebuilding preview DOM every move janks on phones. Only
+    // re-render when the target cell or legality actually changed.
+    var key = r0 + ',' + c0 + ',' + (legal ? '1' : '0');
+    if (key !== lastPreviewKey) {
+      lastPreviewKey = key;
+      renderPreview(drag.piece, r0, c0, legal);
+    }
   }
 
   function renderPreview(piece, r0, c0, legal) {
@@ -246,7 +262,7 @@
       var c = c0 + piece.cells[i][1];
       if (r < 0 || r > 7 || c < 0 || c > 7) continue;
       var d = document.createElement('div');
-      d.className = 'preview-cell blk c' + piece.color + (legal ? ' ok' : ' no');
+      d.className = 'preview-cell c' + piece.color + (legal ? ' ok' : ' no');
       d.style.left = (c * bs) + 'px';
       d.style.top = (r * bs) + 'px';
       d.style.width = bs + 'px';
@@ -255,35 +271,54 @@
     }
   }
 
-  function clearDragVisuals() {
-    if (!drag) return;
-    if (drag.ghost.parentNode) drag.ghost.parentNode.removeChild(drag.ghost);
-    drag.srcGrid.classList.remove('drag-src');
-    els.preview.innerHTML = '';
-  }
-
   function endDragCommon() {
     window.removeEventListener('pointermove', onDragMove);
+    window.removeEventListener('pointerup', onDragEnd);
+    window.removeEventListener('pointercancel', onDragCancel);
     var d = drag;
     drag = null;
-    clearDragVisuals();
+    lastPreviewKey = '';
     return d;
   }
 
-  function onDragEnd() {
+  // Illegal drop (or cancel): the ghost visibly flies back to its tray slot,
+  // then the tray re-renders. The piece always comes home; nothing can stick.
+  function snapBack(d) {
+    d.srcGrid.classList.remove('drag-src');
+    els.preview.innerHTML = '';
+    var slot = els.tray[d.trayIdx];
+    if (!slot) { finishSnapBack(d); return; }
+    var r = slot.getBoundingClientRect();
+    var tx = r.left + r.width / 2 - d.grabX;
+    var ty = r.top + r.height / 2 - d.grabY;
+    d.ghost.style.transition = 'left 0.18s ease-out, top 0.18s ease-out';
+    d.ghost.style.left = tx + 'px';
+    d.ghost.style.top = ty + 'px';
+    setTimeout(function () { finishSnapBack(d); }, 190);
+  }
+
+  function finishSnapBack(d) {
+    if (d.ghost.parentNode) d.ghost.parentNode.removeChild(d.ghost);
+    renderTray();
+  }
+
+  function onDragEnd(e) {
+    if (!drag || e.pointerId !== drag.pointerId) return;
     var d = endDragCommon();
-    if (!d) return;
     if (d.target && d.target.legal && !ctx.isBusy() && !state().gameOver) {
+      if (d.ghost.parentNode) d.ghost.parentNode.removeChild(d.ghost);
+      d.srcGrid.classList.remove('drag-src');
+      els.preview.innerHTML = '';
       ctx.onPlace(d.trayIdx, d.target.r, d.target.c);
     } else {
-      renderTray(); // snap back
+      snapBack(d);
     }
   }
 
-  function onDragCancel() {
+  function onDragCancel(e) {
+    if (!drag || e.pointerId !== drag.pointerId) return;
     var d = endDragCommon();
-    if (!d) return;
-    renderTray();
+    snapBack(d);
   }
 
   /* ---------------- animations and feedback ---------------- */

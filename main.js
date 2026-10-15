@@ -11,7 +11,7 @@
   var sound = new BB.audio.SoundFX();
 
   var BEST_KEY = 'bb_best';
-  var CLEAR_ANIM_MS = 380;
+  var CLEAR_ANIM_MS = 200;
 
   var provider = new ads.DemoAdsProvider();
   ads.demo = provider;
